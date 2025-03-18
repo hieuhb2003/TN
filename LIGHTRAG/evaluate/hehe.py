@@ -1,4 +1,7 @@
 import os
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from lightrag import LightRAG, QueryParam
 from lightrag.llm.hf import hf_embed
@@ -44,12 +47,12 @@ rag = LightRAG(
         ),
     ),
     addon_params={
-        "insert_batch_size": 20  # Process 20 documents per batch
+        "insert_batch_size": 20 
     }
 )
 
 import json
-with open("C:\\Users\\mhieu\\Desktop\\datn\\LIGHTRAG\\example_benchmark\\contexts.json", 'r') as f:
+with open("/Users/oraichain/Desktop/rag/TN/LIGHTRAG/example_benchmark/contexts.json", 'r') as f:
     data = json.load(f)
     
 rag.insert(data) 

@@ -63,7 +63,9 @@
 
 # print(chunk_list)
 
+import sys
 import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import asyncio
 import json
 from typing import List, Dict, Any
@@ -72,7 +74,6 @@ from lightrag.llm.hf import hf_embed
 from lightrag.utils import EmbeddingFunc
 from lightrag.llm.openai import openai_complete_if_cache
 from transformers import AutoModel, AutoTokenizer
-from sentence_transformers import CrossEncoder
 from transformers import AutoModel, AutoTokenizer, AutoModelForSequenceClassification
 import torch
 
@@ -147,7 +148,7 @@ def read_queries_from_file(file_path: str) -> List[str]:
 
 def main():
     
-    queries_file = "C:\\Users\\mhieu\\Desktop\\datn\\LIGHTRAG\\example_benchmark\\queries.json" 
+    queries_file = "/Users/oraichain/Desktop/rag/TN/LIGHTRAG/example_benchmark/queries.json" 
     
     rag = init_rag()
     reranker_model, reranker_tokenizer = init_reranker()
@@ -162,7 +163,7 @@ def main():
         print(f"Processing query: {query}")
         
         # Get chunks using LightRAG
-        _, chunk_list = rag.query(
+        chunk_list = rag.retrieval(
             query,
             param=QueryParam(
                 mode="hybrid",
@@ -171,17 +172,22 @@ def main():
             )
         )
         
-        # Rerank chunks
-        reranked_chunks = rerank_chunks(query, chunk_list, reranker_model, reranker_tokenizer)
+        if len(chunk_list) == 0:
+            print("No chunks found for query")
+            results.append({query : []})
         
-        results.append({query : reranked_chunks})
-        
-        print(f"Found {len(reranked_chunks)} chunks for query")
+        else:
+            # Rerank chunks
+            reranked_chunks = rerank_chunks(query, chunk_list, reranker_model, reranker_tokenizer)
+            
+            results.append({query : reranked_chunks})
+            
+            print(f"Found {len(reranked_chunks)} chunks for query")
     
     # Save results to file
-    output_file = "C:\\Users\\mhieu\\Desktop\\datn\\LIGHTRAG\\example_benchmark\\reranked_results.json"
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+        output_file = "/Users/oraichain/Desktop/rag/TN/LIGHTRAG/example_benchmark/reranked_results.json"
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(results, f, ensure_ascii=False, indent=2)
     
     print(f"Results saved to {output_file}")
 

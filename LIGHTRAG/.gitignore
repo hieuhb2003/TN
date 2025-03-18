@@ -71,3 +71,8 @@ memory-bank/
 example_benchmark/
 
 data/
+
+api_keys.json
+
+*/direct_evaluation_results/
+*/faiss_index/

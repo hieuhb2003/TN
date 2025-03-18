@@ -4,7 +4,9 @@ import logging
 from typing import List, Dict, Any, Optional
 import numpy as np
 from sklearn.metrics import average_precision_score, ndcg_score
-
+import sys
+import os
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # Thiết lập logging
 logging.basicConfig(format='%(asctime)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S',
@@ -235,73 +237,79 @@ if __name__ == "__main__":
     # Khởi tạo evaluator
     evaluator = DirectRetrievalEvaluator()
     
-    # Ví dụ dữ liệu
-    queries = [
-        "What is LightRAG?",
-        "How does BGE-M3 work?",
-        "What are the benefits of knowledge graphs?"
-    ]
+    # # Ví dụ dữ liệu
+    # queries = [
+    #     "What is LightRAG?",
+    #     "How does BGE-M3 work?",
+    #     "What are the benefits of knowledge graphs?"
+    # ]
+    with open("/Users/oraichain/Desktop/rag/TN/LIGHTRAG/example_benchmark/queries.json", "r", encoding="utf-8") as f:
+        queries = json.load(f)
     
+    with open("/Users/oraichain/Desktop/rag/TN/LIGHTRAG/example_benchmark/rertrieval_results.json", "r", encoding="utf-8") as f:
+        model_results = json.load(f)
+
     # Kết quả retrieval từ các mô hình khác nhau (theo thứ tự giảm dần về độ liên quan)
-    model_results = {
-        "LightRAG_hybrid": {
-            "What is LightRAG?": [
-                "LightRAG is a simple and fast Retrieval-Augmented Generation system.",
-                "LightRAG uses a hybrid approach combining knowledge graphs and vector search.",
-                "RAG systems retrieve relevant documents and then generate responses based on them."
-            ],
-            "How does BGE-M3 work?": [
-                "BGE-M3 is a powerful embedding model for text retrieval.",
-                "BGE-M3 is based on the BERT architecture with improvements for multilingual support.",
-                "Vector databases store embeddings for efficient similarity search."
-            ],
-            "What are the benefits of knowledge graphs?": [
-                "Knowledge graphs can improve retrieval by capturing relationships between entities.",
-                "Knowledge graphs represent relationships between entities as a graph structure.",
-                "LightRAG uses a hybrid approach combining knowledge graphs and vector search."
-            ]
-        },
-        "Naive_RAG": {
-            "What is LightRAG?": [
-                "LightRAG is a simple and fast Retrieval-Augmented Generation system.",
-                "RAG systems retrieve relevant documents and then generate responses based on them.",
-                "Retrieval-Augmented Generation combines retrieval and generation for better results."
-            ],
-            "How does BGE-M3 work?": [
-                "BGE-M3 is a powerful embedding model for text retrieval.",
-                "Vector databases store embeddings for efficient similarity search.",
-                "Retrieval-Augmented Generation combines retrieval and generation for better results."
-            ],
-            "What are the benefits of knowledge graphs?": [
-                "Knowledge graphs can improve retrieval by capturing relationships between entities.",
-                "Vector databases store embeddings for efficient similarity search.",
-                "LightRAG uses a hybrid approach combining knowledge graphs and vector search."
-            ]
-        }
-    }
-    
-    # Ground truth
-    ground_truth = {
-        "What is LightRAG?": [
-            "LightRAG is a simple and fast Retrieval-Augmented Generation system.",
-            "LightRAG uses a hybrid approach combining knowledge graphs and vector search."
-        ],
-        "How does BGE-M3 work?": [
-            "BGE-M3 is a powerful embedding model for text retrieval.",
-            "BGE-M3 is based on the BERT architecture with improvements for multilingual support."
-        ],
-        "What are the benefits of knowledge graphs?": [
-            "Knowledge graphs can improve retrieval by capturing relationships between entities.",
-            "Knowledge graphs represent relationships between entities as a graph structure."
-        ]
-    }
-    
+    # model_results = {
+    #     "LightRAG_hybrid": {
+    #         "What is LightRAG?": [
+    #             "LightRAG is a simple and fast Retrieval-Augmented Generation system.",
+    #             "LightRAG uses a hybrid approach combining knowledge graphs and vector search.",
+    #             "RAG systems retrieve relevant documents and then generate responses based on them."
+    #         ],
+    #         "How does BGE-M3 work?": [
+    #             "BGE-M3 is a powerful embedding model for text retrieval.",
+    #             "BGE-M3 is based on the BERT architecture with improvements for multilingual support.",
+    #             "Vector databases store embeddings for efficient similarity search."
+    #         ],
+    #         "What are the benefits of knowledge graphs?": [
+    #             "Knowledge graphs can improve retrieval by capturing relationships between entities.",
+    #             "Knowledge graphs represent relationships between entities as a graph structure.",
+    #             "LightRAG uses a hybrid approach combining knowledge graphs and vector search."
+    #         ]
+    #     },
+    #     "Naive_RAG": {
+    #         "What is LightRAG?": [
+    #             "LightRAG is a simple and fast Retrieval-Augmented Generation system.",
+    #             "RAG systems retrieve relevant documents and then generate responses based on them.",
+    #             "Retrieval-Augmented Generation combines retrieval and generation for better results."
+    #         ],
+    #         "How does BGE-M3 work?": [
+    #             "BGE-M3 is a powerful embedding model for text retrieval.",
+    #             "Vector databases store embeddings for efficient similarity search.",
+    #             "Retrieval-Augmented Generation combines retrieval and generation for better results."
+    #         ],
+    #         "What are the benefits of knowledge graphs?": [
+    #             "Knowledge graphs can improve retrieval by capturing relationships between entities.",
+    #             "Vector databases store embeddings for efficient similarity search.",
+    #             "LightRAG uses a hybrid approach combining knowledge graphs and vector search."
+    #         ]
+    #     }
+    # }
+
+    # # Ground truth
+    # ground_truth = {
+    #     "What is LightRAG?": [
+    #         "LightRAG is a simple and fast Retrieval-Augmented Generation system.",
+    #         "LightRAG uses a hybrid approach combining knowledge graphs and vector search."
+    #     ],
+    #     "How does BGE-M3 work?": [
+    #         "BGE-M3 is a powerful embedding model for text retrieval.",
+    #         "BGE-M3 is based on the BERT architecture with improvements for multilingual support."
+    #     ],
+    #     "What are the benefits of knowledge graphs?": [
+    #         "Knowledge graphs can improve retrieval by capturing relationships between entities.",
+    #         "Knowledge graphs represent relationships between entities as a graph structure."
+    #     ]
+    # }
+    with open("/Users/oraichain/Desktop/rag/TN/LIGHTRAG/example_benchmark/ground_truth.json", "r", encoding="utf-8") as f:
+        ground_truth = json.load(f)
     # Đánh giá các mô hình
     results = evaluator.evaluate_multiple_models(
         queries=queries,
         model_results=model_results,
         ground_truth=ground_truth,
-        at_k=3,
+        at_k=2,
         output_path="./direct_evaluation_results"
     )
     
@@ -312,21 +320,21 @@ if __name__ == "__main__":
         for metric_name, metric_value in metrics.items():
             print(f"  {metric_name}: {metric_value:.4f}")
     
-    # Ví dụ về cách tải dữ liệu từ file JSON
-    print("\nVí dụ về cách tải dữ liệu từ file JSON:")
-    print("# Lưu dữ liệu mẫu vào file JSON")
-    evaluator.save_data_to_json(model_results, "model_results.json")
-    evaluator.save_data_to_json(ground_truth, "ground_truth.json")
+    # # Ví dụ về cách tải dữ liệu từ file JSON
+    # print("\nVí dụ về cách tải dữ liệu từ file JSON:")
+    # print("# Lưu dữ liệu mẫu vào file JSON")
+    # evaluator.save_data_to_json(model_results, "model_results.json")
+    # evaluator.save_data_to_json(ground_truth, "ground_truth.json")
     
-    print("# Tải dữ liệu từ file JSON")
-    loaded_model_results = evaluator.load_data_from_json("model_results.json")
-    loaded_ground_truth = evaluator.load_data_from_json("ground_truth.json")
+    # print("# Tải dữ liệu từ file JSON")
+    # loaded_model_results = evaluator.load_data_from_json("model_results.json")
+    # loaded_ground_truth = evaluator.load_data_from_json("ground_truth.json")
     
-    print("# Đánh giá với dữ liệu đã tải")
-    loaded_results = evaluator.evaluate_multiple_models(
-        queries=queries,
-        model_results=loaded_model_results,
-        ground_truth=loaded_ground_truth,
-        at_k=3,
-        output_path="./direct_evaluation_results_loaded"
-    ) 
+    # print("# Đánh giá với dữ liệu đã tải")
+    # loaded_results = evaluator.evaluate_multiple_models(
+    #     queries=queries,
+    #     model_results=loaded_model_results,
+    #     ground_truth=loaded_ground_truth,
+    #     at_k=3,
+    #     output_path="./direct_evaluation_results_loaded"
+    # ) 

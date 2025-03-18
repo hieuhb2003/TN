@@ -615,7 +615,7 @@ async def kg_query(
     hl_keywords_str = ", ".join(hl_keywords) if hl_keywords else ""
 
     # Build context
-    context, chunk_list = await _build_query_context(
+    context = await _build_query_context(
         ll_keywords_str,
         hl_keywords_str,
         knowledge_graph_inst,
@@ -626,7 +626,7 @@ async def kg_query(
     )
 
     if query_param.only_need_context:
-        return context, list(set(chunk_list))
+        return context
     if context is None:
         return PROMPTS["fail_response"]
 
@@ -681,6 +681,67 @@ async def kg_query(
         ),
     )
     return response
+
+async def kg_retrieval(
+    query: str,
+    knowledge_graph_inst: BaseGraphStorage,
+    entities_vdb: BaseVectorStorage,
+    relationships_vdb: BaseVectorStorage,
+    text_chunks_db: BaseKVStorage,
+    query_param: QueryParam,
+    global_config: dict[str, str],
+    hashing_kv: BaseKVStorage | None = None,
+    system_prompt: str | None = None,
+) -> str:
+    # Handle cache
+    use_model_func = global_config["llm_model_func"]
+    args_hash = compute_args_hash(query_param.mode, query, cache_type="query")
+    cached_response, quantized, min_val, max_val = await handle_cache(
+        hashing_kv, args_hash, query, query_param.mode, cache_type="query"
+    )
+    if cached_response is not None:
+        return cached_response
+
+    # Extract keywords using extract_keywords_only function which already supports conversation history
+    hl_keywords, ll_keywords = await extract_keywords_only(
+        query, query_param, global_config, hashing_kv
+    )
+
+    logger.debug(f"High-level keywords: {hl_keywords}")
+    logger.debug(f"Low-level  keywords: {ll_keywords}")
+
+    # Handle empty keywords
+    if hl_keywords == [] and ll_keywords == []:
+        logger.warning("low_level_keywords and high_level_keywords is empty")
+        return []
+    if ll_keywords == [] and query_param.mode in ["local", "hybrid"]:
+        logger.warning(
+            "low_level_keywords is empty, switching from %s mode to global mode",
+            query_param.mode,
+        )
+        query_param.mode = "global"
+    if hl_keywords == [] and query_param.mode in ["global", "hybrid"]:
+        logger.warning(
+            "high_level_keywords is empty, switching from %s mode to local mode",
+            query_param.mode,
+        )
+        query_param.mode = "local"
+
+    ll_keywords_str = ", ".join(ll_keywords) if ll_keywords else ""
+    hl_keywords_str = ", ".join(hl_keywords) if hl_keywords else ""
+
+    # Build context
+    chunk_list = await _build_retrieval_context(
+        ll_keywords_str,
+        hl_keywords_str,
+        knowledge_graph_inst,
+        entities_vdb,
+        relationships_vdb,
+        text_chunks_db,
+        query_param,
+    )
+
+    return chunk_list
 
 
 async def extract_keywords_only(
@@ -1048,14 +1109,6 @@ async def _build_query_context(
     
     #---------------------------------------------------
     
-    chunk_list = []
-    for item in csv_string_to_list(ll_text_units_context):
-        if item[0].isdigit():
-            chunk_list.append(item[1])
-            
-    for item in csv_string_to_list(hl_text_units_context):
-        if item[0].isdigit():
-            chunk_list.append(item[1])
     
     # entities_list = csv_string_to_list(entities_context)
     # relations_list = csv_string_to_list(relations_context)
@@ -1086,8 +1139,85 @@ async def _build_query_context(
     {text_units_context}
     ```
     """.strip()
-    return result, chunk_list
+    return result
 
+async def _build_retrieval_context(
+    ll_keywords: str,
+    hl_keywords: str,
+    knowledge_graph_inst: BaseGraphStorage,
+    entities_vdb: BaseVectorStorage,
+    relationships_vdb: BaseVectorStorage,
+    text_chunks_db: BaseKVStorage,
+    query_param: QueryParam,
+):
+    if query_param.mode == "local":
+        entities_context, relations_context, text_units_context = await _get_node_data(
+            ll_keywords,
+            knowledge_graph_inst,
+            entities_vdb,
+            text_chunks_db,
+            query_param,
+        )
+    elif query_param.mode == "global":
+        entities_context, relations_context, text_units_context = await _get_edge_data(
+            hl_keywords,
+            knowledge_graph_inst,
+            relationships_vdb,
+            text_chunks_db,
+            query_param,
+        )
+    else:  # hybrid mode
+        ll_data, hl_data = await asyncio.gather(
+            _get_node_data(
+                ll_keywords,
+                knowledge_graph_inst,
+                entities_vdb,
+                text_chunks_db,
+                query_param,
+            ),
+            _get_edge_data(
+                hl_keywords,
+                knowledge_graph_inst,
+                relationships_vdb,
+                text_chunks_db,
+                query_param,
+            ),
+        )
+
+        (
+            ll_entities_context,
+            ll_relations_context,
+            ll_text_units_context,
+        ) = ll_data
+
+        (
+            hl_entities_context,
+            hl_relations_context,
+            hl_text_units_context,
+        ) = hl_data
+
+    
+    ll_chunk_list = []
+    for item in csv_string_to_list(ll_text_units_context):
+        if item[0].isdigit():
+            ll_chunk_list.append(item[1])
+            
+    hl_chunk_list = []
+    for item in csv_string_to_list(hl_text_units_context):
+        if item[0].isdigit():
+            hl_chunk_list.append(item[1])
+
+    if query_param.mode == "local":
+        chunk_list = ll_chunk_list
+        return (ll_chunk_list,[])
+
+    elif query_param.mode == "global":
+        chunk_list = hl_chunk_list
+        return ([],hl_chunk_list)
+
+    else:
+        chunk_list = ll_chunk_list + hl_chunk_list
+    return (ll_chunk_list, hl_chunk_list)
 
 async def _get_node_data(
     query: str,

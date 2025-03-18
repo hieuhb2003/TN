@@ -28,6 +28,7 @@ from .operate import (
     kg_query_with_keywords,
     mix_kg_vector_query,
     naive_query,
+    kg_retrieval
 )
 from .prompt import GRAPH_FIELD_SEP
 from .utils import (
@@ -1158,6 +1159,72 @@ class LightRAG:
             raise ValueError(f"Unknown mode {param.mode}")
         await self._query_done()
         return response
+
+
+    def retrieval(
+        self,
+        query: str,
+        param: QueryParam = QueryParam(),
+        system_prompt: str | None = None,
+    ) -> str | Iterator[str]:
+        """
+        Perform a sync query.
+
+        Args:
+            query (str): The query to be executed.
+            param (QueryParam): Configuration parameters for query execution.
+            prompt (Optional[str]): Custom prompts for fine-tuned control over the system's behavior. Defaults to None, which uses PROMPTS["rag_response"].
+
+        Returns:
+            str: The result of the query execution.
+        """
+        loop = always_get_an_event_loop()
+
+        return loop.run_until_complete(self.aretrieval(query, param, system_prompt))  # type: ignore
+
+    async def aretrieval(
+        self,
+        query: str,
+        param: QueryParam = QueryParam(only_need_context=True),
+        system_prompt: str | None = None,
+    ) -> str | AsyncIterator[str]:
+        """
+        Perform a async query.
+
+        Args:
+            query (str): The query to be executed.
+            param (QueryParam): Configuration parameters for query execution.
+            prompt (Optional[str]): Custom prompts for fine-tuned control over the system's behavior. Defaults to None, which uses PROMPTS["rag_response"].
+
+        Returns:
+            str: The result of the query execution.
+        """
+        if param.mode in ["local", "global", "hybrid"]:
+            response = await kg_retrieval(
+                query,
+                self.chunk_entity_relation_graph,
+                self.entities_vdb,
+                self.relationships_vdb,
+                self.text_chunks,
+                param,
+                asdict(self),
+                hashing_kv=self.llm_response_cache
+                if self.llm_response_cache
+                and hasattr(self.llm_response_cache, "global_config")
+                else self.key_string_value_json_storage_cls(
+                    namespace=make_namespace(
+                        self.namespace_prefix, NameSpace.KV_STORE_LLM_RESPONSE_CACHE
+                    ),
+                    global_config=asdict(self),
+                    embedding_func=self.embedding_func,
+                ),
+                system_prompt=system_prompt,
+            )
+        else:
+            raise ValueError(f"Unsupport mode {param.mode}")
+        await self._query_done()
+        return response
+
 
     def query_with_separate_keyword_extraction(
         self, query: str, prompt: str, param: QueryParam = QueryParam()
