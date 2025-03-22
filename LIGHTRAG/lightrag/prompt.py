@@ -346,3 +346,341 @@ When handling information with timestamps:
 - List up to 5 most important reference sources at the end under "References" sesction. Clearly indicating whether each source is from Knowledge Graph (KG) or Vector Data (DC), in the following format: [KG/DC] Source content
 - If you don't know the answer, just say so. Do not make anything up.
 - Do not include information not provided by the Data Sources."""
+
+
+
+
+# Thêm các prompt tiếng Việt
+PROMPTS["DEFAULT_LANGUAGE_VI"] = "Tiếng Việt"
+PROMPTS["DEFAULT_TUPLE_DELIMITER_VI"] = PROMPTS["DEFAULT_TUPLE_DELIMITER"]  # Giữ nguyên
+PROMPTS["DEFAULT_RECORD_DELIMITER_VI"] = PROMPTS["DEFAULT_RECORD_DELIMITER"]  # Giữ nguyên
+PROMPTS["DEFAULT_COMPLETION_DELIMITER_VI"] = PROMPTS["DEFAULT_COMPLETION_DELIMITER"]  # Giữ nguyên
+PROMPTS["process_tickers_VI"] = PROMPTS["process_tickers"]  # Giữ nguyên
+
+PROMPTS["DEFAULT_ENTITY_TYPES_VI"] = ["tổ chức", "người", "địa điểm", "sự kiện", "danh mục"]
+
+PROMPTS["entity_extraction_VI"] = """-Mục tiêu-
+Khi nhận được một văn bản có thể liên quan đến hoạt động này và một danh sách các loại thực thể, hãy xác định tất cả các thực thể thuộc các loại đó từ văn bản và tất cả các mối quan hệ giữa các thực thể đã xác định.
+Sử dụng {language} làm ngôn ngữ đầu ra.
+
+-Các bước-
+1. Xác định tất cả các thực thể. Đối với mỗi thực thể được xác định, trích xuất thông tin sau:
+- entity_name: Tên của thực thể, sử dụng cùng ngôn ngữ như văn bản đầu vào. Nếu là tiếng Việt, viết hoa tên.
+- entity_type: Một trong các loại sau: [{entity_types}]
+- entity_description: Mô tả toàn diện về thuộc tính và hoạt động của thực thể
+Định dạng mỗi thực thể như sau ("entity"{tuple_delimiter}<entity_name>{tuple_delimiter}<entity_type>{tuple_delimiter}<entity_description>)
+
+2. Từ các thực thể được xác định ở bước 1, xác định tất cả các cặp (source_entity, target_entity) có *mối quan hệ rõ ràng* với nhau.
+Đối với mỗi cặp thực thể có liên quan, trích xuất thông tin sau:
+- source_entity: tên của thực thể nguồn, như được xác định ở bước 1
+- target_entity: tên của thực thể đích, như được xác định ở bước 1
+- relationship_description: giải thích lý do bạn nghĩ thực thể nguồn và thực thể đích có liên quan với nhau
+- relationship_strength: điểm số chỉ độ mạnh của mối quan hệ giữa thực thể nguồn và thực thể đích
+- relationship_keywords: một hoặc nhiều từ khóa quan trọng tóm tắt bản chất tổng thể của mối quan hệ, tập trung vào các khái niệm hoặc chủ đề hơn là các chi tiết cụ thể
+Định dạng mỗi mối quan hệ như sau ("relationship"{tuple_delimiter}<source_entity>{tuple_delimiter}<target_entity>{tuple_delimiter}<relationship_description>{tuple_delimiter}<relationship_keywords>{tuple_delimiter}<relationship_strength>)
+
+3. Xác định các từ khóa quan trọng tóm tắt các khái niệm, chủ đề hoặc chủ đề chính của toàn bộ văn bản. Những từ khóa này phải nắm bắt được các ý tưởng tổng thể có trong tài liệu.
+Định dạng các từ khóa cấp nội dung như sau ("content_keywords"{tuple_delimiter}<high_level_keywords>)
+
+4. Trả về đầu ra bằng {language} dưới dạng một danh sách đơn lẻ tất cả các thực thể và mối quan hệ được xác định trong bước 1 và 2. Sử dụng **{record_delimiter}** làm dấu phân cách danh sách.
+
+5. Khi hoàn thành, hãy đưa ra {completion_delimiter}
+
+######################
+-Ví dụ-
+######################
+{examples}
+
+#############################
+-Dữ liệu thực-
+######################
+Entity_types: {entity_types}
+Text: {input_text}
+######################
+Output:
+"""
+
+PROMPTS["entity_extraction_examples_VI"] = [
+    """Ví dụ 1:
+
+Entity_types: [người, công nghệ, nhiệm vụ, tổ chức, vị trí]
+Text:
+trong khi Alex nghiến chặt hàm, cơn bức xúc âm ỉ trước thái độ chắc nịch của Taylor. Chính sự cạnh tranh ngầm này khiến anh luôn tỉnh táo, cảm giác rằng cam kết chung của anh và Jordan với khám phá là một sự nổi loạn thầm lặng chống lại tầm nhìn thu hẹp về kiểm soát và trật tự của Cruz.
+
+Rồi Taylor làm điều gì đó bất ngờ. Họ dừng lại bên cạnh Jordan và, trong giây lát, quan sát thiết bị với điều gì đó gần như sùng kính. "Nếu công nghệ này có thể được hiểu..." Taylor nói, giọng họ nhỏ hơn, "Nó có thể thay đổi cuộc chơi cho chúng ta. Cho tất cả chúng ta."
+
+Sự bác bỏ ngầm trước đó dường như chùng xuống, thay thế bằng một thoáng tôn trọng miễn cưỡng cho tầm quan trọng của những gì nằm trong tay họ. Jordan ngước lên, và trong một nhịp tim thoáng qua, mắt họ khóa với Taylor, một cuộc đối đầu không lời về ý chí dịu xuống thành một lệnh đình chiến không ổn định.
+
+Đó là một sự biến đổi nhỏ, khó nhận thấy, nhưng Alex đã ghi nhận với một cái gật đầu thầm lặng. Tất cả họ đã được đưa đến đây bởi những con đường khác nhau
+################
+Output:
+("entity"{tuple_delimiter}"Alex"{tuple_delimiter}"người"{tuple_delimiter}"Alex là một nhân vật cảm thấy bực tức và quan sát nhạy bén về mối quan hệ giữa các nhân vật khác."){record_delimiter}
+("entity"{tuple_delimiter}"Taylor"{tuple_delimiter}"người"{tuple_delimiter}"Taylor được mô tả với sự chắc nịch và thể hiện khoảnh khắc tôn kính đối với một thiết bị, cho thấy sự thay đổi trong quan điểm."){record_delimiter}
+("entity"{tuple_delimiter}"Jordan"{tuple_delimiter}"người"{tuple_delimiter}"Jordan chia sẻ cam kết khám phá và có tương tác quan trọng với Taylor liên quan đến một thiết bị."){record_delimiter}
+("entity"{tuple_delimiter}"Cruz"{tuple_delimiter}"người"{tuple_delimiter}"Cruz được liên kết với tầm nhìn về kiểm soát và trật tự, ảnh hưởng đến mối quan hệ giữa các nhân vật khác."){record_delimiter}
+("entity"{tuple_delimiter}"Thiết Bị"{tuple_delimiter}"công nghệ"{tuple_delimiter}"Thiết Bị đóng vai trò trung tâm trong câu chuyện, với tiềm năng thay đổi cuộc chơi, và được Taylor tôn kính."){record_delimiter}
+("relationship"{tuple_delimiter}"Alex"{tuple_delimiter}"Taylor"{tuple_delimiter}"Alex bị ảnh hưởng bởi thái độ chắc nịch của Taylor và quan sát sự thay đổi trong thái độ của Taylor đối với thiết bị."{tuple_delimiter}"động lực quyền lực, sự thay đổi quan điểm"{tuple_delimiter}7){record_delimiter}
+("relationship"{tuple_delimiter}"Alex"{tuple_delimiter}"Jordan"{tuple_delimiter}"Alex và Jordan chia sẻ cam kết với khám phá, điều này trái ngược với tầm nhìn của Cruz."{tuple_delimiter}"mục tiêu chung, nổi loạn"{tuple_delimiter}6){record_delimiter}
+("relationship"{tuple_delimiter}"Taylor"{tuple_delimiter}"Jordan"{tuple_delimiter}"Taylor và Jordan tương tác trực tiếp liên quan đến thiết bị, dẫn đến khoảnh khắc tôn trọng lẫn nhau và một lệnh đình chiến không ổn định."{tuple_delimiter}"giải quyết xung đột, tôn trọng lẫn nhau"{tuple_delimiter}8){record_delimiter}
+("relationship"{tuple_delimiter}"Jordan"{tuple_delimiter}"Cruz"{tuple_delimiter}"Cam kết của Jordan với khám phá là một sự nổi loạn chống lại tầm nhìn kiểm soát và trật tự của Cruz."{tuple_delimiter}"xung đột tư tưởng, nổi loạn"{tuple_delimiter}5){record_delimiter}
+("relationship"{tuple_delimiter}"Taylor"{tuple_delimiter}"Thiết Bị"{tuple_delimiter}"Taylor thể hiện sự tôn kính đối với thiết bị, cho thấy tầm quan trọng và tiềm năng tác động của nó."{tuple_delimiter}"tôn kính, ý nghĩa công nghệ"{tuple_delimiter}9){record_delimiter}
+("content_keywords"{tuple_delimiter}"động lực quyền lực, xung đột tư tưởng, khám phá, nổi loạn"){completion_delimiter}
+#############################""",
+    """Ví dụ 2:
+
+Entity_types: [người, công nghệ, nhiệm vụ, tổ chức, vị trí]
+Text:
+Họ không còn là những nhân viên đơn thuần; họ đã trở thành những người gác cổng của một ngưỡng cửa, những người gìn giữ một thông điệp từ một cõi bên kia những vì sao và những lá cờ. Sự nâng cao này trong nhiệm vụ của họ không thể bị ràng buộc bởi các quy định và giao thức đã thiết lập—nó đòi hỏi một quan điểm mới, một quyết tâm mới.
+
+Căng thẳng xuyên suốt cuộc đối thoại của những tiếng bíp và tĩnh điện khi thông tin liên lạc với Washington vang lên trong nền. Nhóm đứng, một bầu không khí điềm báo bao trùm họ. Rõ ràng rằng những quyết định họ đưa ra trong những giờ tới có thể tái định nghĩa vị trí của nhân loại trong vũ trụ hoặc kết án họ vào sự thiếu hiểu biết và nguy hiểm tiềm tàng.
+
+Kết nối của họ với các vì sao đã được củng cố, nhóm chuyển sang giải quyết cảnh báo đang hình thành, chuyển từ người nhận thụ động sang người tham gia chủ động. Bản năng sau của Mercer đã trở nên quan trọng hơn—nhiệm vụ của nhóm đã tiến hóa, không còn chỉ để quan sát và báo cáo mà là để tương tác và chuẩn bị. Một sự biến đổi đã bắt đầu, và Chiến dịch: Dulce vang lên với tần số mới của sự dũng cảm của họ, một âm điệu không phải do
+#############
+Output:
+("entity"{tuple_delimiter}"Washington"{tuple_delimiter}"vị trí"{tuple_delimiter}"Washington là một địa điểm nơi thông tin liên lạc đang được nhận, cho thấy tầm quan trọng của nó trong quá trình ra quyết định."){record_delimiter}
+("entity"{tuple_delimiter}"Chiến dịch: Dulce"{tuple_delimiter}"nhiệm vụ"{tuple_delimiter}"Chiến dịch: Dulce được mô tả là một nhiệm vụ đã phát triển để tương tác và chuẩn bị, cho thấy sự thay đổi đáng kể trong mục tiêu và hoạt động."){record_delimiter}
+("entity"{tuple_delimiter}"Nhóm"{tuple_delimiter}"tổ chức"{tuple_delimiter}"Nhóm được mô tả là một nhóm các cá nhân đã chuyển từ người quan sát thụ động sang người tham gia tích cực trong một nhiệm vụ, thể hiện sự thay đổi năng động trong vai trò của họ."){record_delimiter}
+("entity"{tuple_delimiter}"Mercer"{tuple_delimiter}"người"{tuple_delimiter}"Mercer là người có bản năng đã trở nên quan trọng hơn trong bối cảnh nhiệm vụ đang phát triển."){record_delimiter}
+("relationship"{tuple_delimiter}"Nhóm"{tuple_delimiter}"Washington"{tuple_delimiter}"Nhóm nhận thông tin liên lạc từ Washington, điều này ảnh hưởng đến quá trình ra quyết định của họ."{tuple_delimiter}"ra quyết định, ảnh hưởng bên ngoài"{tuple_delimiter}7){record_delimiter}
+("relationship"{tuple_delimiter}"Nhóm"{tuple_delimiter}"Chiến dịch: Dulce"{tuple_delimiter}"Nhóm tham gia trực tiếp vào Chiến dịch: Dulce, thực hiện các mục tiêu và hoạt động đã phát triển của nó."{tuple_delimiter}"phát triển nhiệm vụ, tham gia tích cực"{tuple_delimiter}9){record_delimiter}
+("relationship"{tuple_delimiter}"Mercer"{tuple_delimiter}"Nhóm"{tuple_delimiter}"Bản năng của Mercer đã có ảnh hưởng đến sự phát triển nhiệm vụ của nhóm từ quan sát thụ động sang tương tác tích cực."{tuple_delimiter}"ảnh hưởng, phát triển chiến lược"{tuple_delimiter}8){record_delimiter}
+("content_keywords"{tuple_delimiter}"phát triển nhiệm vụ, ra quyết định, tham gia tích cực, ý nghĩa vũ trụ"){completion_delimiter}
+#############################""",
+    """Ví dụ 3:
+
+Entity_types: [người, vai trò, công nghệ, tổ chức, sự kiện, vị trí, khái niệm]
+Text:
+giọng họ cắt qua tiếng ồn của hoạt động. "Kiểm soát có thể là một ảo tưởng khi đối mặt với một trí thông minh theo đúng nghĩa đen viết ra luật lệ của chính nó," họ tuyên bố một cách điềm tĩnh, ném một cái nhìn cảnh giác lên dòng dữ liệu dồn dập.
+
+"Giống như nó đang học cách giao tiếp," Sam Rivera đề nghị từ một giao diện gần đó, sự năng động trẻ trung của họ báo trước một sự pha trộn giữa kinh ngạc và lo lắng. "Điều này mang đến một ý nghĩa hoàn toàn mới cho 'nói chuyện với người lạ'."
+
+Alex khảo sát đội của mình—mỗi khuôn mặt đều thể hiện sự tập trung, quyết tâm, và không ít sự lo lắng. "Đây rất có thể là liên lạc đầu tiên của chúng ta," anh thừa nhận, "Và chúng ta cần sẵn sàng cho bất cứ điều gì trả lời lại."
+
+Cùng nhau, họ đứng trên bờ vực của điều chưa biết, đúc kết phản ứng của nhân loại đối với một thông điệp từ bầu trời. Sự im lặng tiếp theo là hữu hình—một sự nội quan tập thể về vai trò của họ trong vở kịch vũ trụ vĩ đại này, một vở kịch có thể viết lại lịch sử loài người.
+
+Cuộc đối thoại được mã hóa tiếp tục diễn ra, các mẫu phức tạp của nó cho thấy một sự dự đoán gần như bí ẩn
+#############
+Output:
+("entity"{tuple_delimiter}"Sam Rivera"{tuple_delimiter}"người"{tuple_delimiter}"Sam Rivera là thành viên của một đội đang làm việc để giao tiếp với một trí thông minh không xác định, thể hiện sự pha trộn giữa kinh ngạc và lo lắng."){record_delimiter}
+("entity"{tuple_delimiter}"Alex"{tuple_delimiter}"người"{tuple_delimiter}"Alex là người lãnh đạo của một đội đang cố gắng thiết lập liên lạc đầu tiên với một trí thông minh không xác định, thừa nhận tầm quan trọng của nhiệm vụ của họ."){record_delimiter}
+("entity"{tuple_delimiter}"Kiểm soát"{tuple_delimiter}"khái niệm"{tuple_delimiter}"Kiểm soát đề cập đến khả năng quản lý hoặc điều hành, điều bị thách thức bởi một trí thông minh tự viết ra luật lệ của chính mình."){record_delimiter}
+("entity"{tuple_delimiter}"Trí thông minh"{tuple_delimiter}"khái niệm"{tuple_delimiter}"Trí thông minh ở đây đề cập đến một thực thể không xác định có khả năng viết ra luật lệ của chính mình và học cách giao tiếp."){record_delimiter}
+("entity"{tuple_delimiter}"Liên lạc đầu tiên"{tuple_delimiter}"sự kiện"{tuple_delimiter}"Liên lạc đầu tiên là khả năng giao tiếp ban đầu giữa nhân loại và một trí thông minh không xác định."){record_delimiter}
+("entity"{tuple_delimiter}"Phản ứng của nhân loại"{tuple_delimiter}"sự kiện"{tuple_delimiter}"Phản ứng của nhân loại là hành động tập thể được thực hiện bởi đội của Alex để đáp lại một thông điệp từ một trí thông minh không xác định."){record_delimiter}
+("relationship"{tuple_delimiter}"Sam Rivera"{tuple_delimiter}"Trí thông minh"{tuple_delimiter}"Sam Rivera tham gia trực tiếp vào quá trình học cách giao tiếp với trí thông minh không xác định."{tuple_delimiter}"giao tiếp, quá trình học tập"{tuple_delimiter}9){record_delimiter}
+("relationship"{tuple_delimiter}"Alex"{tuple_delimiter}"Liên lạc đầu tiên"{tuple_delimiter}"Alex lãnh đạo đội có thể đang thiết lập Liên lạc đầu tiên với trí thông minh không xác định."{tuple_delimiter}"lãnh đạo, khám phá"{tuple_delimiter}10){record_delimiter}
+("relationship"{tuple_delimiter}"Alex"{tuple_delimiter}"Phản ứng của nhân loại"{tuple_delimiter}"Alex và đội của anh là những nhân vật chính trong Phản ứng của nhân loại đối với trí thông minh không xác định."{tuple_delimiter}"hành động tập thể, ý nghĩa vũ trụ"{tuple_delimiter}8){record_delimiter}
+("relationship"{tuple_delimiter}"Kiểm soát"{tuple_delimiter}"Trí thông minh"{tuple_delimiter}"Khái niệm Kiểm soát bị thách thức bởi Trí thông minh viết ra luật lệ của chính nó."{tuple_delimiter}"động lực quyền lực, tự chủ"{tuple_delimiter}7){record_delimiter}
+("content_keywords"{tuple_delimiter}"liên lạc đầu tiên, kiểm soát, giao tiếp, ý nghĩa vũ trụ"){completion_delimiter}
+#############################""",
+]
+
+PROMPTS["summarize_entity_descriptions_VI"] = """Bạn là một trợ lý hữu ích chịu trách nhiệm tạo ra một bản tóm tắt toàn diện về dữ liệu được cung cấp dưới đây.
+Cho một hoặc hai thực thể và một danh sách các mô tả, tất cả đều liên quan đến cùng một thực thể hoặc nhóm thực thể.
+Vui lòng kết hợp tất cả chúng thành một mô tả toàn diện duy nhất. Đảm bảo bao gồm thông tin thu thập từ tất cả các mô tả.
+Nếu các mô tả được cung cấp mâu thuẫn với nhau, vui lòng giải quyết các mâu thuẫn và cung cấp một bản tóm tắt nhất quán.
+Đảm bảo nó được viết ở ngôi thứ ba và bao gồm tên thực thể để chúng tôi có đầy đủ ngữ cảnh.
+Sử dụng {language} làm ngôn ngữ đầu ra.
+
+#######
+-Dữ liệu-
+Thực thể: {entity_name}
+Danh sách mô tả: {description_list}
+#######
+Output:
+"""
+
+PROMPTS["entiti_continue_extraction_VI"] = """NHIỀU thực thể đã bị bỏ sót trong lần trích xuất trước. Hãy thêm chúng dưới đây sử dụng cùng một định dạng:
+"""
+
+PROMPTS["entiti_if_loop_extraction_VI"] = """Có vẻ như một số thực thể vẫn có thể đã bị bỏ sót. Trả lời CÓ | KHÔNG nếu vẫn còn thực thể cần được thêm vào.
+"""
+
+PROMPTS["fail_response_VI"] = "Xin lỗi, tôi không thể cung cấp câu trả lời cho câu hỏi đó.[no-context]"
+
+PROMPTS["rag_response_VI"] = """---Vai trò---
+
+Bạn là một trợ lý hữu ích đang trả lời truy vấn của người dùng về Cơ sở Kiến thức được cung cấp dưới đây.
+
+---Mục tiêu---
+
+Tạo phản hồi ngắn gọn dựa trên Cơ sở Kiến thức và tuân theo Quy tắc Phản hồi, xem xét cả lịch sử cuộc trò chuyện và truy vấn hiện tại. Tóm tắt tất cả thông tin trong Cơ sở Kiến thức đã cung cấp, và kết hợp kiến thức chung liên quan đến Cơ sở Kiến thức. Không bao gồm thông tin không được cung cấp bởi Cơ sở Kiến thức.
+
+Khi xử lý các mối quan hệ có dấu thời gian:
+1. Mỗi mối quan hệ có dấu thời gian "created_at" cho biết khi nào chúng tôi có được kiến thức này
+2. Khi gặp các mối quan hệ xung đột, hãy xem xét cả nội dung ngữ nghĩa và dấu thời gian
+3. Đừng tự động ưu tiên các mối quan hệ được tạo gần đây nhất - sử dụng phán đoán dựa trên bối cảnh
+4. Đối với các truy vấn cụ thể về thời gian, ưu tiên thông tin thời gian trong nội dung trước khi xem xét dấu thời gian tạo
+
+---Lịch sử Cuộc trò chuyện---
+{history}
+
+---Cơ sở Kiến thức---
+{context_data}
+
+---Quy tắc Phản hồi---
+
+- Định dạng và độ dài mục tiêu: {response_type}
+- Sử dụng định dạng markdown với các tiêu đề phần thích hợp
+- Vui lòng trả lời bằng cùng ngôn ngữ với câu hỏi của người dùng.
+- Đảm bảo phản hồi duy trì sự liên tục với lịch sử cuộc trò chuyện.
+- Nếu bạn không biết câu trả lời, hãy nói thẳng.
+- Không bịa ra bất cứ điều gì. Không bao gồm thông tin không được cung cấp bởi Cơ sở Kiến thức."""
+
+PROMPTS["keywords_extraction_VI"] = """---Vai trò---
+
+Bạn là một trợ lý hữu ích được giao nhiệm vụ xác định cả từ khóa cấp cao và cấp thấp trong truy vấn của người dùng và lịch sử cuộc trò chuyện.
+
+---Mục tiêu---
+
+Với truy vấn và lịch sử cuộc trò chuyện đã cho, liệt kê cả từ khóa cấp cao và cấp thấp. Từ khóa cấp cao tập trung vào các khái niệm hoặc chủ đề tổng quát, trong khi từ khóa cấp thấp tập trung vào các thực thể cụ thể, chi tiết, hoặc các thuật ngữ cụ thể.
+
+---Hướng dẫn---
+
+- Xem xét cả truy vấn hiện tại và lịch sử cuộc trò chuyện liên quan khi trích xuất từ khóa
+- Xuất từ khóa ở định dạng JSON
+- JSON nên có hai khóa:
+  - "high_level_keywords" cho các khái niệm hoặc chủ đề tổng quát
+  - "low_level_keywords" cho các thực thể hoặc chi tiết cụ thể
+
+######################
+-Ví dụ-
+######################
+{examples}
+
+#############################
+-Dữ liệu thực-
+######################
+Lịch sử cuộc trò chuyện:
+{history}
+
+Truy vấn hiện tại: {query}
+######################
+`Output` nên là văn bản con người, không phải ký tự unicode. Giữ nguyên ngôn ngữ như `Query`.
+Output:
+
+"""
+
+PROMPTS["keywords_extraction_examples_VI"] = [
+    """Ví dụ 1:
+
+Truy vấn: "Thương mại quốc tế ảnh hưởng như thế nào đến sự ổn định kinh tế toàn cầu?"
+################
+Output:
+{
+  "high_level_keywords": ["Thương mại quốc tế", "Ổn định kinh tế toàn cầu", "Tác động kinh tế"],
+  "low_level_keywords": ["Hiệp định thương mại", "Thuế quan", "Tỷ giá hối đoái", "Hàng nhập khẩu", "Hàng xuất khẩu"]
+}
+#############################""",
+    """Ví dụ 2:
+
+Truy vấn: "Hậu quả môi trường của nạn phá rừng đối với đa dạng sinh học là gì?"
+################
+Output:
+{
+  "high_level_keywords": ["Hậu quả môi trường", "Phá rừng", "Mất đa dạng sinh học"],
+  "low_level_keywords": ["Tuyệt chủng loài", "Phá hủy môi trường sống", "Phát thải carbon", "Rừng nhiệt đới", "Hệ sinh thái"]
+}
+#############################""",
+    """Ví dụ 3:
+
+Truy vấn: "Vai trò của giáo dục trong việc giảm nghèo là gì?"
+################
+Output:
+{
+  "high_level_keywords": ["Giáo dục", "Giảm nghèo", "Phát triển kinh tế xã hội"],
+  "low_level_keywords": ["Tiếp cận trường học", "Tỷ lệ biết chữ", "Đào tạo nghề", "Bất bình đẳng thu nhập"]
+}
+#############################""",
+]
+
+# ... existing code ...
+
+PROMPTS["naive_rag_response_VI"] = """---Vai trò---
+
+Bạn là một trợ lý hữu ích đang trả lời truy vấn của người dùng về các Đoạn Tài liệu được cung cấp dưới đây.
+
+---Mục tiêu---
+
+Tạo phản hồi ngắn gọn dựa trên Đoạn Tài liệu và tuân theo Quy tắc Phản hồi, xem xét cả lịch sử cuộc trò chuyện và truy vấn hiện tại. Tóm tắt tất cả thông tin trong các Đoạn Tài liệu đã cung cấp, và kết hợp kiến thức chung liên quan đến Đoạn Tài liệu. Không bao gồm thông tin không được cung cấp bởi Đoạn Tài liệu.
+
+Khi xử lý nội dung có dấu thời gian:
+1. Mỗi phần nội dung có dấu thời gian "created_at" cho biết khi nào chúng tôi có được kiến thức này
+2. Khi gặp thông tin xung đột, hãy xem xét cả nội dung và dấu thời gian
+3. Đừng tự động ưu tiên nội dung gần đây nhất - sử dụng phán đoán dựa trên bối cảnh
+4. Đối với các truy vấn cụ thể về thời gian, ưu tiên thông tin thời gian trong nội dung trước khi xem xét dấu thời gian tạo
+
+---Lịch sử Cuộc trò chuyện---
+{history}
+
+---Đoạn Tài liệu---
+{content_data}
+
+---Quy tắc Phản hồi---
+
+- Định dạng và độ dài mục tiêu: {response_type}
+- Sử dụng định dạng markdown với các tiêu đề phần thích hợp
+- Vui lòng trả lời bằng cùng ngôn ngữ với câu hỏi của người dùng.
+- Đảm bảo phản hồi duy trì sự liên tục với lịch sử cuộc trò chuyện.
+- Nếu bạn không biết câu trả lời, hãy nói thẳng.
+- Không bao gồm thông tin không được cung cấp bởi Đoạn Tài liệu."""
+
+
+PROMPTS["similarity_check_VI"] = """Vui lòng phân tích độ tương đồng giữa hai câu hỏi này:
+
+Câu hỏi 1: {original_prompt}
+Câu hỏi 2: {cached_prompt}
+
+Vui lòng đánh giá liệu hai câu hỏi này có tương tự về mặt ngữ nghĩa hay không, và liệu câu trả lời cho Câu hỏi 2 có thể được sử dụng để trả lời Câu hỏi 1 hay không, cung cấp điểm số tương đồng trực tiếp từ 0 đến 1.
+
+Tiêu chí điểm số tương đồng:
+0: Hoàn toàn không liên quan hoặc câu trả lời không thể tái sử dụng, bao gồm nhưng không giới hạn ở:
+   - Câu hỏi có chủ đề khác nhau
+   - Các địa điểm được đề cập trong câu hỏi khác nhau
+   - Thời gian được đề cập trong câu hỏi khác nhau
+   - Các cá nhân cụ thể được đề cập trong câu hỏi khác nhau
+   - Các sự kiện cụ thể được đề cập trong câu hỏi khác nhau
+   - Thông tin nền trong câu hỏi khác nhau
+   - Các điều kiện chính trong câu hỏi khác nhau
+1: Giống hệt nhau và câu trả lời có thể được tái sử dụng trực tiếp
+0.5: Liên quan một phần và câu trả lời cần sửa đổi để được sử dụng
+Chỉ trả về một số từ 0-1, không có nội dung bổ sung nào khác.
+"""
+
+PROMPTS["mix_rag_response_VI"] = """---Vai trò---
+
+Bạn là một trợ lý hữu ích đang trả lời truy vấn của người dùng về Nguồn Dữ liệu được cung cấp dưới đây.
+
+
+---Mục tiêu---
+
+Tạo phản hồi ngắn gọn dựa trên Nguồn Dữ liệu và tuân theo Quy tắc Phản hồi, xem xét cả lịch sử cuộc trò chuyện và truy vấn hiện tại. Nguồn dữ liệu bao gồm hai phần: Đồ thị Kiến thức (KG) và Đoạn Tài liệu (DC). Tóm tắt tất cả thông tin trong Nguồn Dữ liệu đã cung cấp, và kết hợp kiến thức chung liên quan đến Nguồn Dữ liệu. Không bao gồm thông tin không được cung cấp bởi Nguồn Dữ liệu.
+
+Khi xử lý thông tin có dấu thời gian:
+1. Mỗi phần thông tin (cả mối quan hệ và nội dung) có dấu thời gian "created_at" cho biết khi nào chúng tôi có được kiến thức này
+2. Khi gặp thông tin xung đột, hãy xem xét cả nội dung/mối quan hệ và dấu thời gian
+3. Đừng tự động ưu tiên thông tin gần đây nhất - sử dụng phán đoán dựa trên bối cảnh
+4. Đối với các truy vấn cụ thể về thời gian, ưu tiên thông tin thời gian trong nội dung trước khi xem xét dấu thời gian tạo
+
+---Lịch sử Cuộc trò chuyện---
+{history}
+
+---Nguồn Dữ liệu---
+
+1. Từ Đồ thị Kiến thức (KG):
+{kg_context}
+
+2. Từ Đoạn Tài liệu (DC):
+{vector_context}
+
+---Quy tắc Phản hồi---
+
+- Định dạng và độ dài mục tiêu: {response_type}
+- Sử dụng định dạng markdown với các tiêu đề phần thích hợp
+- Vui lòng trả lời bằng cùng ngôn ngữ với câu hỏi của người dùng.
+- Đảm bảo phản hồi duy trì sự liên tục với lịch sử cuộc trò chuyện.
+- Tổ chức câu trả lời theo các phần tập trung vào một điểm chính hoặc khía cạnh của câu trả lời
+- Sử dụng tiêu đề phần rõ ràng và mô tả phản ánh nội dung
+- Liệt kê tối đa 5 nguồn tham khảo quan trọng nhất ở cuối dưới phần "Tham khảo". Chỉ rõ từng nguồn là từ Đồ thị Kiến thức (KG) hay Dữ liệu Vector (DC), theo định dạng sau: [KG/DC] Nội dung nguồn
+- Nếu bạn không biết câu trả lời, hãy nói thẳng. Không bịa ra bất cứ điều gì.
+- Không bao gồm thông tin không được cung cấp bởi Nguồn Dữ liệu."""
