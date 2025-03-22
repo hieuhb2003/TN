@@ -1,0 +1,155 @@
+<html>
+    <head>
+        <meta charset="utf-8">
+        
+            <script src="lib/bindings/utils.js"></script>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js" integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+            
+        
+<center>
+<h1></h1>
+</center>
+
+<!-- <link rel="stylesheet" href="../node_modules/vis/dist/vis.min.css" type="text/css" />
+<script type="text/javascript" src="../node_modules/vis/dist/vis.js"> </script>-->
+        <link
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css"
+          rel="stylesheet"
+          integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6"
+          crossorigin="anonymous"
+        />
+        <script
+          src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf"
+          crossorigin="anonymous"
+        ></script>
+
+
+        <center>
+          <h1></h1>
+        </center>
+        <style type="text/css">
+
+             #mynetwork {
+                 width: 100%;
+                 height: 100vh;
+                 background-color: #ffffff;
+                 border: 1px solid lightgray;
+                 position: relative;
+                 float: left;
+             }
+
+             
+
+             
+
+             
+        </style>
+    </head>
+
+
+    <body>
+        <div class="card" style="width: 100%">
+            
+            
+            <div id="mynetwork" class="card-body"></div>
+        </div>
+
+        
+        
+
+        <script type="text/javascript">
+
+              // initialize global variables.
+              var edges;
+              var nodes;
+              var allNodes;
+              var allEdges;
+              var nodeColors;
+              var originalNodes;
+              var network;
+              var container;
+              var options, data;
+              var filter = {
+                  item : '',
+                  property : '',
+                  value : []
+              };
+
+              
+
+              
+
+              // This method is responsible for drawing the graph, returns the drawn network
+              function drawGraph() {
+                  var container = document.getElementById('mynetwork');
+
+                  
+
+                  // parsing and collecting nodes and edges from the python
+                  nodes = new vis.DataSet([{"color": "#907ca2", "description": "\"The Directorate for Roads of Vietnam is a government organization that receives mandatory data from service servers.\"\u003cSEP\u003e\"T\u1ed5ng c\u1ee5c \u0110\u01b0\u1eddng b\u1ed9 Vi\u1ec7t Nam is a government organization that receives data from service servers.\"", "entity_type": "\"ORGANIZATION\"", "id": "\"T\u1ed4NG C\u1ee4C \u0110\u01af\u1edcNG B\u1ed8 VI\u1ec6T NAM\"", "label": "\"T\u1ed4NG C\u1ee4C \u0110\u01af\u1edcNG B\u1ed8 VI\u1ec6T NAM\"", "shape": "dot", "size": 10, "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"The Directorate for Roads of Vietnam is a government organization that receives mandatory data from service servers.\"\u003cSEP\u003e\"T\u1ed5ng c\u1ee5c \u0110\u01b0\u1eddng b\u1ed9 Vi\u1ec7t Nam is a government organization that receives data from service servers.\""}, {"color": "#bf50f2", "description": "\"Data is structured information transmitted from a journey monitoring device to a service server, and then required data is sent to the Directorate for Roads of Vietnam.\"\u003cSEP\u003e\"D\u1eef li\u1ec7u is structured information that is passed from a journey monitoring device to a service server, which then passes a copy to the Vietnam Road Administration.\"", "entity_type": "\"CATEGORY\"", "id": "\"D\u1eee LI\u1ec6U\"", "label": "\"D\u1eee LI\u1ec6U\"", "shape": "dot", "size": 10, "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"Data is structured information transmitted from a journey monitoring device to a service server, and then required data is sent to the Directorate for Roads of Vietnam.\"\u003cSEP\u003e\"D\u1eef li\u1ec7u is structured information that is passed from a journey monitoring device to a service server, which then passes a copy to the Vietnam Road Administration.\""}, {"color": "#90e539", "description": "\"A service server is a server belonging to either a transport unit or a journey monitoring service provider. It receives data from journey monitoring devices and transmits required data to the Directorate for Roads of Vietnam.\"", "entity_type": "\"ORGANIZATION\"", "id": "\"M\u00c1Y CH\u1ee6 D\u1ecaCH V\u1ee4\"", "label": "\"M\u00c1Y CH\u1ee6 D\u1ecaCH V\u1ee4\"", "shape": "dot", "size": 10, "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"A service server is a server belonging to either a transport unit or a journey monitoring service provider. It receives data from journey monitoring devices and transmits required data to the Directorate for Roads of Vietnam.\""}, {"color": "#c35412", "description": "The government agency receiving the data.", "entity_type": "T\u1ed4NG C\u1ee4C \u0110\u01af\u1edcNG B\u1ed8 VI\u1ec6T NAM", "id": "\"DIRECTORATE FOR ROADS OF VIETNAM\"", "label": "\"DIRECTORATE FOR ROADS OF VIETNAM\"", "shape": "dot", "size": 10, "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "The government agency receiving the data."}, {"color": "#6b514c", "description": "\"Transport units are organizations that operate vehicles and utilize journey monitoring services. They may have their own service servers.\"\u003cSEP\u003e\"\u0110\u01a1n v\u1ecb v\u1eadn t\u1ea3i is are transport units that use service servers to perform the task receive data transmitted from the cruise monitoring device.\"", "entity_type": "\"ORGANIZATION\"", "id": "\"\u0110\u01a0N V\u1eca V\u1eacN T\u1ea2I\"", "label": "\"\u0110\u01a0N V\u1eca V\u1eacN T\u1ea2I\"", "shape": "dot", "size": 10, "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"Transport units are organizations that operate vehicles and utilize journey monitoring services. They may have their own service servers.\"\u003cSEP\u003e\"\u0110\u01a1n v\u1ecb v\u1eadn t\u1ea3i is are transport units that use service servers to perform the task receive data transmitted from the cruise monitoring device.\""}, {"color": "#5501f3", "description": "Unit with own service server.", "entity_type": "\u0110\u01a0N V\u1eca V\u1eacN T\u1ea2I", "id": "\"TRANSPORT SERVICE PROVIDER\"", "label": "\"TRANSPORT SERVICE PROVIDER\"", "shape": "dot", "size": 10, "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "Unit with own service server."}, {"color": "#03c6f7", "description": "\"Journey monitoring service providers for cars are organizations that provide management, exploitation, aggregation, analysis, and data storage services from a vehicle\u0027s journey monitoring device.  (Short name: service provider unit).\"\u003cSEP\u003e\"\u0110\u01a1n v\u1ecb cung c\u1ea5p d\u1ecbch v\u1ee5 gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh c\u1ee7a xe \u00f4 t\u00f4 provides management, exploitation, aggregation, analysis, and data storage services from the vehicle\u0027s cruise monitoring equipment. Short name is: service provider unit.\"", "entity_type": "\"ORGANIZATION\"", "id": "\"\u0110\u01a0N V\u1eca CUNG C\u1ea4P D\u1ecaCH V\u1ee4 GI\u00c1M S\u00c1T H\u00c0NH TR\u00ccNH C\u1ee6A XE \u00d4 T\u00d4\"", "label": "\"\u0110\u01a0N V\u1eca CUNG C\u1ea4P D\u1ecaCH V\u1ee4 GI\u00c1M S\u00c1T H\u00c0NH TR\u00ccNH C\u1ee6A XE \u00d4 T\u00d4\"", "shape": "dot", "size": 10, "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"Journey monitoring service providers for cars are organizations that provide management, exploitation, aggregation, analysis, and data storage services from a vehicle\u0027s journey monitoring device.  (Short name: service provider unit).\"\u003cSEP\u003e\"\u0110\u01a1n v\u1ecb cung c\u1ea5p d\u1ecbch v\u1ee5 gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh c\u1ee7a xe \u00f4 t\u00f4 provides management, exploitation, aggregation, analysis, and data storage services from the vehicle\u0027s cruise monitoring equipment. Short name is: service provider unit.\""}, {"color": "#84433f", "description": "\"Transport business units are organizations that engage in transport as a business and contract with journey monitoring service providers.\"\u003cSEP\u003e\"\u0110\u01a1n v\u1ecb kinh doanh v\u1eadn t\u1ea3i signs service contracts with units providing cruise monitoring services.\"", "entity_type": "\"ORGANIZATION\"", "id": "\"\u0110\u01a0N V\u1eca KINH DOANH V\u1eacN T\u1ea2I\"", "label": "\"\u0110\u01a0N V\u1eca KINH DOANH V\u1eacN T\u1ea2I\"", "shape": "dot", "size": 10, "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"Transport business units are organizations that engage in transport as a business and contract with journey monitoring service providers.\"\u003cSEP\u003e\"\u0110\u01a1n v\u1ecb kinh doanh v\u1eadn t\u1ea3i signs service contracts with units providing cruise monitoring services.\""}, {"color": "#3848b7", "description": "Organizations that provide tracking services.", "entity_type": "\u0110\u01a0N V\u1eca CUNG C\u1ea4P D\u1ecaCH V\u1ee4 GI\u00c1M S\u00c1T H\u00c0NH TR\u00ccNH C\u1ee6A XE \u00d4 T\u00d4", "id": "\"VEHICLE TRACKING SERVICE PROVIDERS\"", "label": "\"VEHICLE TRACKING SERVICE PROVIDERS\"", "shape": "dot", "size": 10, "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "Organizations that provide tracking services."}, {"color": "#7afc72", "description": "Units that contract with service providers.", "entity_type": "\u0110\u01a0N V\u1eca KINH DOANH V\u1eacN T\u1ea2I", "id": "\"TRANSPORT BUSINESSES\"", "label": "\"TRANSPORT BUSINESSES\"", "shape": "dot", "size": 10, "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "Units that contract with service providers."}, {"color": "#471622", "description": "\"The Journey Monitoring Device is the device that initially collects and transmits the structured Data.\"", "entity_type": "\"CATEGORY\"", "id": "\"THI\u1ebeT B\u1eca GI\u00c1M S\u00c1T H\u00c0NH TR\u00ccNH\"", "label": "\"THI\u1ebeT B\u1eca GI\u00c1M S\u00c1T H\u00c0NH TR\u00ccNH\"", "shape": "dot", "size": 10, "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"The Journey Monitoring Device is the device that initially collects and transmits the structured Data.\""}, {"color": "#0b1351", "description": "Structured information transmitted.", "entity_type": "D\u1eee LI\u1ec6U", "id": "\"DATA\"", "label": "\"DATA\"", "shape": "dot", "size": 10, "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "Structured information transmitted."}, {"color": "#1bf2db", "description": "Server receiving and transmitting data.", "entity_type": "M\u00c1Y CH\u1ee6 D\u1ecaCH V\u1ee4", "id": "\"SERVICE SERVER\"", "label": "\"SERVICE SERVER\"", "shape": "dot", "size": 10, "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "Server receiving and transmitting data."}, {"color": "#71e8f9", "description": "Device that sends data, installed on the vehicles (implied).", "entity_type": "THI\u1ebeT B\u1eca GI\u00c1M S\u00c1T H\u00c0NH TR\u00ccNH", "id": "\"TRACKING DEVICE\"", "label": "\"TRACKING DEVICE\"", "shape": "dot", "size": 10, "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "Device that sends data, installed on the vehicles (implied)."}, {"color": "#c5c4f7", "description": "\"Cars, vehicles subject to journey monitoring regulations.\"", "entity_type": "\"CATEGORY\"", "id": "\"XE \u00d4 T\u00d4\"", "label": "\"XE \u00d4 T\u00d4\"", "shape": "dot", "size": 10, "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"Cars, vehicles subject to journey monitoring regulations.\""}, {"color": "#5c66a6", "description": "Implied entity, not derectly named.", "entity_type": "XE \u00d4 T\u00d4", "id": "\"VEHICLE\"", "label": "\"VEHICLE\"", "shape": "dot", "size": 10, "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "Implied entity, not derectly named."}]);
+                  edges = new vis.DataSet([{"description": "\"Structured data (D\u1eef li\u1ec7u) is sent to the Service Server, and mandatory data is then transferred to T\u1ed5ng c\u1ee5c \u0110\u01b0\u1eddng b\u1ed9 Vi\u1ec7t Nam (Directorate for Roads of Vietnam).\"\u003cSEP\u003e\"Structured data, D\u1eef li\u1ec7u, is sent to the Service Server and from there, is transferred to T\u1ed5ng c\u1ee5c \u0110\u01b0\u1eddng b\u1ed9 Vi\u1ec7t Nam, Vietnam Road Administration.\"", "from": "\"T\u1ed4NG C\u1ee4C \u0110\u01af\u1edcNG B\u1ed8 VI\u1ec6T NAM\"", "keywords": "\"data transmission, regulation\"", "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"Structured data (D\u1eef li\u1ec7u) is sent to the Service Server, and mandatory data is then transferred to T\u1ed5ng c\u1ee5c \u0110\u01b0\u1eddng b\u1ed9 Vi\u1ec7t Nam (Directorate for Roads of Vietnam).\"\u003cSEP\u003e\"Structured data, D\u1eef li\u1ec7u, is sent to the Service Server and from there, is transferred to T\u1ed5ng c\u1ee5c \u0110\u01b0\u1eddng b\u1ed9 Vi\u1ec7t Nam, Vietnam Road Administration.\"", "to": "\"D\u1eee LI\u1ec6U\"", "width": 18.0}, {"description": "\"M\u00e1y ch\u1ee7 d\u1ecbch v\u1ee5 is the service server that transmits data to T\u1ed5ng c\u1ee5c \u0110\u01b0\u1eddng b\u1ed9 Vi\u1ec7t Nam.\"", "from": "\"T\u1ed4NG C\u1ee4C \u0110\u01af\u1edcNG B\u1ed8 VI\u1ec6T NAM\"", "keywords": "\"data transmission, infrastructure\"", "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"M\u00e1y ch\u1ee7 d\u1ecbch v\u1ee5 is the service server that transmits data to T\u1ed5ng c\u1ee5c \u0110\u01b0\u1eddng b\u1ed9 Vi\u1ec7t Nam.\"", "to": "\"M\u00c1Y CH\u1ee6 D\u1ecaCH V\u1ee4\"", "width": 9.0}, {"description": "Translation equivalent (Vietnamese \u2194 English)", "from": "\"T\u1ed4NG C\u1ee4C \u0110\u01af\u1edcNG B\u1ed8 VI\u1ec6T NAM\"", "keywords": "translation,cross-lingual,Vietnamese,English", "languages": "Vietnamese,English", "original_language": "Vietnamese", "relation_type": "translation_equivalent", "source_id": "cross_lingual", "title": "Translation equivalent (Vietnamese \u2194 English)", "to": "\"DIRECTORATE FOR ROADS OF VIETNAM\"", "translated_language": "English", "width": 1.0}, {"description": "\"The transport unit (\u0110\u01a1n v\u1ecb v\u1eadn t\u1ea3i) may have its own service server (M\u00e1y ch\u1ee7 d\u1ecbch v\u1ee5).\"\u003cSEP\u003e\"The transport unit, \u0110\u01a1n v\u1ecb v\u1eadn t\u1ea3i, has a service server, M\u00e1y ch\u1ee7 d\u1ecbch v\u1ee5.\"", "from": "\"\u0110\u01a0N V\u1eca V\u1eacN T\u1ea2I\"", "keywords": "\"service provision, infrastructure\"\u003cSEP\u003e\"service provision, infrastructure, ownership option\"", "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"The transport unit (\u0110\u01a1n v\u1ecb v\u1eadn t\u1ea3i) may have its own service server (M\u00e1y ch\u1ee7 d\u1ecbch v\u1ee5).\"\u003cSEP\u003e\"The transport unit, \u0110\u01a1n v\u1ecb v\u1eadn t\u1ea3i, has a service server, M\u00e1y ch\u1ee7 d\u1ecbch v\u1ee5.\"", "to": "\"M\u00c1Y CH\u1ee6 D\u1ecaCH V\u1ee4\"", "width": 16.0}, {"description": "Translation equivalent (Vietnamese \u2194 English)", "from": "\"\u0110\u01a0N V\u1eca V\u1eacN T\u1ea2I\"", "keywords": "translation,cross-lingual,Vietnamese,English", "languages": "Vietnamese,English", "original_language": "Vietnamese", "relation_type": "translation_equivalent", "source_id": "cross_lingual", "title": "Translation equivalent (Vietnamese \u2194 English)", "to": "\"TRANSPORT SERVICE PROVIDER\"", "translated_language": "English", "width": 1.0}, {"description": "\"\u0110\u01a1n v\u1ecb cung c\u1ea5p d\u1ecbch v\u1ee5 gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh c\u1ee7a xe \u00f4 t\u00f4 (Journey monitoring service providers) provide services to \u0110\u01a1n v\u1ecb kinh doanh v\u1eadn t\u1ea3i (transport business units) under contract.\"\u003cSEP\u003e\"\u0110\u01a1n v\u1ecb cung c\u1ea5p d\u1ecbch v\u1ee5 gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh c\u1ee7a xe \u00f4 t\u00f4 provides cruise monitoring services to business units under contract.\"", "from": "\"\u0110\u01a0N V\u1eca CUNG C\u1ea4P D\u1ecaCH V\u1ee4 GI\u00c1M S\u00c1T H\u00c0NH TR\u00ccNH C\u1ee6A XE \u00d4 T\u00d4\"", "keywords": "\"service provision, contract\"", "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"\u0110\u01a1n v\u1ecb cung c\u1ea5p d\u1ecbch v\u1ee5 gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh c\u1ee7a xe \u00f4 t\u00f4 (Journey monitoring service providers) provide services to \u0110\u01a1n v\u1ecb kinh doanh v\u1eadn t\u1ea3i (transport business units) under contract.\"\u003cSEP\u003e\"\u0110\u01a1n v\u1ecb cung c\u1ea5p d\u1ecbch v\u1ee5 gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh c\u1ee7a xe \u00f4 t\u00f4 provides cruise monitoring services to business units under contract.\"", "to": "\"\u0110\u01a0N V\u1eca KINH DOANH V\u1eacN T\u1ea2I\"", "width": 18.0}, {"description": "\"The cruise monitoring service provider unit, \u0110\u01a1n v\u1ecb cung c\u1ea5p d\u1ecbch v\u1ee5 gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh c\u1ee7a xe \u00f4 t\u00f4, has a service server, M\u00e1y ch\u1ee7 d\u1ecbch v\u1ee5.\"\u003cSEP\u003e\"The journey monitoring service provider unit (\u0110\u01a1n v\u1ecb cung c\u1ea5p d\u1ecbch v\u1ee5 gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh c\u1ee7a xe \u00f4 t\u00f4) operates a service server (M\u00e1y ch\u1ee7 d\u1ecbch v\u1ee5).\"", "from": "\"\u0110\u01a0N V\u1eca CUNG C\u1ea4P D\u1ecaCH V\u1ee4 GI\u00c1M S\u00c1T H\u00c0NH TR\u00ccNH C\u1ee6A XE \u00d4 T\u00d4\"", "keywords": "\"service provision, infrastructure\"\u003cSEP\u003e\"service provision, infrastructure, operation\"", "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"The cruise monitoring service provider unit, \u0110\u01a1n v\u1ecb cung c\u1ea5p d\u1ecbch v\u1ee5 gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh c\u1ee7a xe \u00f4 t\u00f4, has a service server, M\u00e1y ch\u1ee7 d\u1ecbch v\u1ee5.\"\u003cSEP\u003e\"The journey monitoring service provider unit (\u0110\u01a1n v\u1ecb cung c\u1ea5p d\u1ecbch v\u1ee5 gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh c\u1ee7a xe \u00f4 t\u00f4) operates a service server (M\u00e1y ch\u1ee7 d\u1ecbch v\u1ee5).\"", "to": "\"M\u00c1Y CH\u1ee6 D\u1ecaCH V\u1ee4\"", "width": 17.0}, {"description": "Translation equivalent (Vietnamese \u2194 English)", "from": "\"\u0110\u01a0N V\u1eca CUNG C\u1ea4P D\u1ecaCH V\u1ee4 GI\u00c1M S\u00c1T H\u00c0NH TR\u00ccNH C\u1ee6A XE \u00d4 T\u00d4\"", "keywords": "translation,cross-lingual,Vietnamese,English", "languages": "Vietnamese,English", "original_language": "Vietnamese", "relation_type": "translation_equivalent", "source_id": "cross_lingual", "title": "Translation equivalent (Vietnamese \u2194 English)", "to": "\"VEHICLE TRACKING SERVICE PROVIDERS\"", "translated_language": "English", "width": 1.0}, {"description": "Translation equivalent (Vietnamese \u2194 English)", "from": "\"\u0110\u01a0N V\u1eca KINH DOANH V\u1eacN T\u1ea2I\"", "keywords": "translation,cross-lingual,Vietnamese,English", "languages": "Vietnamese,English", "original_language": "Vietnamese", "relation_type": "translation_equivalent", "source_id": "cross_lingual", "title": "Translation equivalent (Vietnamese \u2194 English)", "to": "\"TRANSPORT BUSINESSES\"", "translated_language": "English", "width": 1.0}, {"description": "\"Structured data (D\u1eef li\u1ec7u) is transferred from the Thi\u1ebft b\u1ecb gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh (monitoring device) to the M\u00e1y ch\u1ee7 d\u1ecbch v\u1ee5 (service server).\"\u003cSEP\u003e\"Structured data, D\u1eef li\u1ec7u, is transferred from the monitoring device to the service server.\"", "from": "\"D\u1eee LI\u1ec6U\"", "keywords": "\"data reception, processing\"", "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"Structured data (D\u1eef li\u1ec7u) is transferred from the Thi\u1ebft b\u1ecb gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh (monitoring device) to the M\u00e1y ch\u1ee7 d\u1ecbch v\u1ee5 (service server).\"\u003cSEP\u003e\"Structured data, D\u1eef li\u1ec7u, is transferred from the monitoring device to the service server.\"", "to": "\"M\u00c1Y CH\u1ee6 D\u1ecaCH V\u1ee4\"", "width": 17.0}, {"description": "\"The journey monitoring device (Thi\u1ebft b\u1ecb gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh) is the source of, collects and sends the data (D\u1eef li\u1ec7u).\"", "from": "\"D\u1eee LI\u1ec6U\"", "keywords": "data origin, transmission", "source_id": "chunk-20c3f59d7a7bb8e6ccee9996c33ce09c", "title": "\"The journey monitoring device (Thi\u1ebft b\u1ecb gi\u00e1m s\u00e1t h\u00e0nh tr\u00ecnh) is the source of, collects and sends the data (D\u1eef li\u1ec7u).\"", "to": "\"THI\u1ebeT B\u1eca GI\u00c1M S\u00c1T H\u00c0NH TR\u00ccNH\"", "width": 10.0}, {"description": "Translation equivalent (Vietnamese \u2194 English)", "from": "\"D\u1eee LI\u1ec6U\"", "keywords": "translation,cross-lingual,Vietnamese,English", "languages": "Vietnamese,English", "original_language": "Vietnamese", "relation_type": "translation_equivalent", "source_id": "cross_lingual", "title": "Translation equivalent (Vietnamese \u2194 English)", "to": "\"DATA\"", "translated_language": "English", "width": 1.0}, {"description": "Translation equivalent (Vietnamese \u2194 English)", "from": "\"M\u00c1Y CH\u1ee6 D\u1ecaCH V\u1ee4\"", "keywords": "translation,cross-lingual,Vietnamese,English", "languages": "Vietnamese,English", "original_language": "Vietnamese", "relation_type": "translation_equivalent", "source_id": "cross_lingual", "title": "Translation equivalent (Vietnamese \u2194 English)", "to": "\"SERVICE SERVER\"", "translated_language": "English", "width": 1.0}, {"description": "Translation equivalent (Vietnamese \u2194 English)", "from": "\"THI\u1ebeT B\u1eca GI\u00c1M S\u00c1T H\u00c0NH TR\u00ccNH\"", "keywords": "translation,cross-lingual,Vietnamese,English", "languages": "Vietnamese,English", "original_language": "Vietnamese", "relation_type": "translation_equivalent", "source_id": "cross_lingual", "title": "Translation equivalent (Vietnamese \u2194 English)", "to": "\"TRACKING DEVICE\"", "translated_language": "English", "width": 1.0}, {"description": "Translation equivalent (Vietnamese \u2194 English)", "from": "\"XE \u00d4 T\u00d4\"", "keywords": "translation,cross-lingual,Vietnamese,English", "languages": "Vietnamese,English", "original_language": "Vietnamese", "relation_type": "translation_equivalent", "source_id": "cross_lingual", "title": "Translation equivalent (Vietnamese \u2194 English)", "to": "\"VEHICLE\"", "translated_language": "English", "width": 1.0}, {"description": "Data is sent to the Directorate for Roads of Vietnam.", "from": "\"DIRECTORATE FOR ROADS OF VIETNAM\"", "keywords": "transmitted, to", "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "Data is sent to the Directorate for Roads of Vietnam.", "to": "\"DATA\"", "width": 1.0}, {"description": "The Service server transmits data to the Directorate for Roads of Vietnam.", "from": "\"DIRECTORATE FOR ROADS OF VIETNAM\"", "keywords": "transmits, to", "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "The Service server transmits data to the Directorate for Roads of Vietnam.", "to": "\"SERVICE SERVER\"", "width": 1.0}, {"description": "The transport service providert may have its own service server.", "from": "\"TRANSPORT SERVICE PROVIDER\"", "keywords": "server, of", "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "The transport service providert may have its own service server.", "to": "\"SERVICE SERVER\"", "width": 1.0}, {"description": "Vehicle tracking service providers provide services to transport businesses under contract.", "from": "\"VEHICLE TRACKING SERVICE PROVIDERS\"", "keywords": "under contracts with", "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "Vehicle tracking service providers provide services to transport businesses under contract.", "to": "\"TRANSPORT BUSINESSES\"", "width": 1.0}, {"description": "The tracking service provider has a service server that receives data.", "from": "\"VEHICLE TRACKING SERVICE PROVIDERS\"", "keywords": "server, of", "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "The tracking service provider has a service server that receives data.", "to": "\"SERVICE SERVER\"", "width": 1.0}, {"description": "Structured data is transmitted from the tracking device to the service server.", "from": "\"DATA\"", "keywords": "transmitted, from, to", "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "Structured data is transmitted from the tracking device to the service server.", "to": "\"SERVICE SERVER\"", "width": 1.0}, {"description": "The tracking device is the source and collection point that send Data.", "from": "\"DATA\"", "keywords": "transmitted, from", "source_id": "chunk-e678f4df480c85c1acd0d964e964cd00", "title": "The tracking device is the source and collection point that send Data.", "to": "\"TRACKING DEVICE\"", "width": 1.0}]);
+
+                  nodeColors = {};
+                  allNodes = nodes.get({ returnType: "Object" });
+                  for (nodeId in allNodes) {
+                    nodeColors[nodeId] = allNodes[nodeId].color;
+                  }
+                  allEdges = edges.get({ returnType: "Object" });
+                  // adding nodes and edges to the graph
+                  data = {nodes: nodes, edges: edges};
+
+                  var options = {
+    "configure": {
+        "enabled": false
+    },
+    "edges": {
+        "color": {
+            "inherit": true
+        },
+        "smooth": {
+            "enabled": true,
+            "type": "dynamic"
+        }
+    },
+    "interaction": {
+        "dragNodes": true,
+        "hideEdgesOnDrag": false,
+        "hideNodesOnDrag": false
+    },
+    "physics": {
+        "enabled": true,
+        "stabilization": {
+            "enabled": true,
+            "fit": true,
+            "iterations": 1000,
+            "onlyDynamicEdges": false,
+            "updateInterval": 50
+        }
+    }
+};
+
+                  
+
+
+                  
+
+                  network = new vis.Network(container, data, options);
+
+                  
+
+                  
+
+                  
+
+
+                  
+
+                  return network;
+
+              }
+              drawGraph();
+        </script>
+    </body>
+</html>

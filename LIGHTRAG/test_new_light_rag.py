@@ -54,7 +54,7 @@ class APIManager:
 # Khởi tạo API Manager
 api_manager = APIManager(OPENROUTER_API_KEYS)
 
-WORKING_DIR = "./test_duo"
+WORKING_DIR = "./test_duo_v2"
 
 if not os.path.exists(WORKING_DIR):
     os.mkdir(WORKING_DIR)
@@ -120,7 +120,8 @@ rag = LightRAG(
         ),
     ),
     addon_params={
-        "insert_batch_size": 20  
+        "insert_batch_size": 20,
+        "language": "Việt Name"
     }
 )
 

@@ -684,3 +684,22 @@ Khi xử lý thông tin có dấu thời gian:
 - Liệt kê tối đa 5 nguồn tham khảo quan trọng nhất ở cuối dưới phần "Tham khảo". Chỉ rõ từng nguồn là từ Đồ thị Kiến thức (KG) hay Dữ liệu Vector (DC), theo định dạng sau: [KG/DC] Nội dung nguồn
 - Nếu bạn không biết câu trả lời, hãy nói thẳng. Không bịa ra bất cứ điều gì.
 - Không bao gồm thông tin không được cung cấp bởi Nguồn Dữ liệu."""
+
+def get_prompt(prompt_key: str, language: str = "EN") -> str:
+    """Get prompt by key and language
+    
+    Args:
+        prompt_key: The key of the prompt
+        language: Language code ('EN' for English, 'VI' for Vietnamese)
+        
+    Returns:
+        str: The prompt in the specified language
+    """
+    if language == "Việt Nam":
+        # Try to get Vietnamese version first
+        vi_key = f"{prompt_key}_VI"
+        if vi_key in PROMPTS:
+            return PROMPTS[vi_key]
+    
+    # Fallback to English version
+    return PROMPTS[prompt_key]
