@@ -1682,8 +1682,8 @@ class LightRAG:
         self,
         data_original,
         data_translated=None,
-        source_language: str,
-        target_language: str,
+        source_language="Vietnamese",
+        target_language="English",
         store_translations=True,
         translation_db_path=None
     ):
@@ -1702,15 +1702,15 @@ class LightRAG:
         """
         loop = always_get_an_event_loop()
         return loop.run_until_complete(
-            self.ainsert_duo(data_original, data_translated, target_language, store_translations, translation_db_path)
+            self.ainsert_duo(data_original, data_translated, source_language, target_language, store_translations, translation_db_path)
         )
 
     async def ainsert_duo(
         self,
         data_original,
         data_translated=None,
-        source_language: str,
-        target_language="Vietnamese",
+        source_language="Vietnamese",
+        target_language="English",
         store_translations=True,
         translation_db_path=None
     ):
