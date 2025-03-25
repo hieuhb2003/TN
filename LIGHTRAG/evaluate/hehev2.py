@@ -54,7 +54,7 @@ class APIManager:
 # Khởi tạo API Manager
 api_manager = APIManager(OPENROUTER_API_KEYS)
 
-WORKING_DIR = "./example_benchmark"
+WORKING_DIR = "./example_benchmark_with_single_insert"
 
 if not os.path.exists(WORKING_DIR):
     os.mkdir(WORKING_DIR)
@@ -124,7 +124,7 @@ rag = LightRAG(
     }
 )
 
-def insert_with_retry(data):
+def insert_with_retry(data, language="Vietnamese"):
     global current_api_key
     max_retries = len(OPENROUTER_API_KEYS)
     retry_count = 0
@@ -133,7 +133,8 @@ def insert_with_retry(data):
         try:
   
             os.environ["LLM_BINDING_API_KEY"] = current_api_key
-            rag.insert(data)
+            rag.insert(data, language=language, matching_method="embedding")
+            # rag.insert_duo(data_original=data[0], data_translated=data[1])
             print("Chèn dữ liệu thành công!")
             return
         except Exception as e:
@@ -154,10 +155,17 @@ def insert_with_retry(data):
 
 def main():
     try:
-        with open("/Users/oraichain/Desktop/rag/TN/LIGHTRAG/example_benchmark/contexts.json", 'r') as f:
+        with open("/Users/oraichain/Desktop/rag/TN/LIGHTRAG/data/duo_data_sample.json", 'r') as f:
             data = json.load(f)
-        
-        insert_with_retry(data)
+
+        data = data[0]
+        for i, item in enumerate(data):
+            if i == 0:
+                language = "Vietnamese"
+                insert_with_retry(item, language=language)
+            else:
+                language = "English"
+                insert_with_retry(item, language=language)
         
     except Exception as e:
         print(f"Lỗi khi xử lý dữ liệu: {str(e)}")

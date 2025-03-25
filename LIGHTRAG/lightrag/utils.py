@@ -713,3 +713,51 @@ def get_conversation_turns(
         )
 
     return "\n".join(formatted_turns)
+
+
+def detect_language(text: str) -> str:
+    """
+    Detect the language of a given text.
+    Uses langdetect library to determine the language.
+    
+    Args:
+        text: Text to detect language from
+        
+    Returns:
+        Language code (e.g., 'vi', 'en', etc.)
+    """
+    try:
+        import langdetect
+        from langdetect import DetectorFactory
+        # Set seed for reproducibility
+        DetectorFactory.seed = 0
+        
+        # Attempt to detect language
+        language_code = langdetect.detect(text)
+        
+        # Map language codes to full names
+        language_map = {
+            'vi': 'Vietnamese',
+            'en': 'English',
+            'fr': 'French',
+            'de': 'German',
+            'ja': 'Japanese',
+            'ko': 'Korean',
+            'zh-cn': 'Chinese',
+            'zh-tw': 'Chinese',
+            'zh': 'Chinese',
+            'es': 'Spanish',
+            'pt': 'Portuguese',
+            'it': 'Italian',
+            'ru': 'Russian',
+            'ar': 'Arabic',
+            'hi': 'Hindi',
+            'th': 'Thai',
+            # Add more mappings as needed
+        }
+        
+        return language_map.get(language_code, language_code)
+    except:
+        
+        logger.warning(f"Failed to detect language for text: {text[:100]}...")
+        return "Unknown"

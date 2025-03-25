@@ -23,7 +23,9 @@ from .utils import (
     CacheData,
     statistic_data,
     get_conversation_turns,
-    csv_string_to_list
+    csv_string_to_list,
+    detect_language,
+    cosine_similarity
 )
 from .base import (
     BaseGraphStorage,
@@ -132,6 +134,7 @@ async def _handle_entity_relation_summary(
 async def _handle_single_entity_extraction(
     record_attributes: list[str],
     chunk_key: str,
+    current_language: str = "Vietnamese"
 ):
     if len(record_attributes) < 4 or record_attributes[0] != '"entity"':
         return None
@@ -147,6 +150,7 @@ async def _handle_single_entity_extraction(
         entity_type=entity_type,
         description=entity_description,
         source_id=entity_source_id,
+        language=current_language
     )
 
 
@@ -216,6 +220,7 @@ async def _merge_nodes_then_upsert(
         entity_type=entity_type,
         description=description,
         source_id=source_id,
+        language=detect_language(description),
     )
     await knowledge_graph_inst.upsert_node(
         entity_name,
@@ -236,6 +241,7 @@ async def _merge_edges_then_upsert(
     already_source_ids = []
     already_description = []
     already_keywords = []
+    already_language = None
 
     if await knowledge_graph_inst.has_edge(src_id, tgt_id):
         already_edge = await knowledge_graph_inst.get_edge(src_id, tgt_id)
@@ -263,6 +269,10 @@ async def _merge_edges_then_upsert(
                         already_edge["keywords"], [GRAPH_FIELD_SEP]
                     )
                 )
+                
+            # Get language if it already exists
+            if already_edge.get("language") is not None:
+                already_language = already_edge["language"]
 
     # Process edges_data with None checks
     weight = sum([dp["weight"] for dp in edges_data] + already_weights)
@@ -297,11 +307,19 @@ async def _merge_edges_then_upsert(
                     "source_id": source_id,
                     "description": description,
                     "entity_type": '"UNKNOWN"',
+                    "language": detect_language(description),
                 },
             )
     description = await _handle_entity_relation_summary(
         f"({src_id}, {tgt_id})", description, global_config
     )
+    
+    # Detect language from description if not already set
+    if not already_language:
+        language = detect_language(description)
+    else:
+        language = already_language
+    
     await knowledge_graph_inst.upsert_edge(
         src_id,
         tgt_id,
@@ -310,6 +328,7 @@ async def _merge_edges_then_upsert(
             description=description,
             keywords=keywords,
             source_id=source_id,
+            language=language,
         ),
     )
 
@@ -318,6 +337,7 @@ async def _merge_edges_then_upsert(
         tgt_id=tgt_id,
         description=description,
         keywords=keywords,
+        language=language,
     )
 
     return edge_data
@@ -438,6 +458,8 @@ async def extract_entities(
         chunk_key = chunk_key_dp[0]
         chunk_dp = chunk_key_dp[1]
         content = chunk_dp["content"]
+        current_language = global_config.get("addon_params", {}).get("current_language", "Vietnamese")
+    
         # hint_prompt = entity_extract_prompt.format(**context_base, input_text=content)
         hint_prompt = entity_extract_prompt.format(
             **context_base, input_text="{input_text}"
@@ -478,7 +500,7 @@ async def extract_entities(
                 record, [context_base["tuple_delimiter"]]
             )
             if_entities = await _handle_single_entity_extraction(
-                record_attributes, chunk_key
+                record_attributes, chunk_key, current_language
             )
             if if_entities is not None:
                 maybe_nodes[if_entities["entity_name"]].append(if_entities)
@@ -488,6 +510,7 @@ async def extract_entities(
                 record_attributes, chunk_key
             )
             if if_relation is not None:
+                if_relation["language"] = current_language
                 maybe_edges[(if_relation["src_id"], if_relation["tgt_id"])].append(
                     if_relation
                 )
@@ -619,6 +642,8 @@ async def kg_query(
     ll_keywords_str = ", ".join(ll_keywords) if ll_keywords else ""
     hl_keywords_str = ", ".join(hl_keywords) if hl_keywords else ""
 
+    print(ll_keywords_str)
+    print(hl_keywords_str)
     # Build context
     context = await _build_query_context(
         ll_keywords_str,
@@ -1062,7 +1087,7 @@ async def _build_query_context(
     query_param: QueryParam,
 ):
     if query_param.mode == "local":
-        entities_context, relations_context, text_units_context = await _get_node_data(
+        entities_context, relations_context, text_units_context, entity_chunks_mapping = await _get_node_data(
             ll_keywords,
             knowledge_graph_inst,
             entities_vdb,
@@ -1070,7 +1095,7 @@ async def _build_query_context(
             query_param,
         )
     elif query_param.mode == "global":
-        entities_context, relations_context, text_units_context = await _get_edge_data(
+        entities_context, relations_context, text_units_context, relation_chunks_mapping = await _get_edge_data(
             hl_keywords,
             knowledge_graph_inst,
             relationships_vdb,
@@ -1099,12 +1124,14 @@ async def _build_query_context(
             ll_entities_context,
             ll_relations_context,
             ll_text_units_context,
+            ll_entity_chunks_mapping,
         ) = ll_data
 
         (
             hl_entities_context,
             hl_relations_context,
             hl_text_units_context,
+            hl_relation_chunks_mapping,
         ) = hl_data
 
         entities_context, relations_context, text_units_context = combine_contexts(
@@ -1160,7 +1187,7 @@ async def _build_retrieval_context(
     query_param: QueryParam,
 ):
     if query_param.mode == "local":
-        entities_context, relations_context, text_units_context = await _get_node_data(
+        entities_context, relations_context, text_units_context, entity_chunks_mapping = await _get_node_data(
             ll_keywords,
             knowledge_graph_inst,
             entities_vdb,
@@ -1168,7 +1195,7 @@ async def _build_retrieval_context(
             query_param,
         )
     elif query_param.mode == "global":
-        entities_context, relations_context, text_units_context = await _get_edge_data(
+        entities_context, relations_context, text_units_context, relation_chunks_mapping = await _get_edge_data(
             hl_keywords,
             knowledge_graph_inst,
             relationships_vdb,
@@ -1197,36 +1224,98 @@ async def _build_retrieval_context(
             ll_entities_context,
             ll_relations_context,
             ll_text_units_context,
+            ll_entity_chunks_mapping,
         ) = ll_data
 
         (
             hl_entities_context,
             hl_relations_context,
             hl_text_units_context,
+            hl_relation_chunks_mapping,
         ) = hl_data
 
-    
-    ll_chunk_list = []
-    for item in csv_string_to_list(ll_text_units_context):
-        if item[0].isdigit():
-            ll_chunk_list.append(item[1])
+    async def calculate_scores(query, chunks_mapping, vdb, is_entity=True):
+        # Lấy embedding của query
+        query_embedding = await vdb.embedding_func(query)
+        
+        # Tính điểm cho từng chunk
+        scored_chunks = []
+        rank = 0
+        
+        for key, chunks in chunks_mapping.items():
+            # Tính similarity giữa entity/relation và query
+            if is_entity:
+                # Cho entities
+                entity_vector = await vdb.embedding_func(key)
+                entity_similarity = cosine_similarity(query_embedding, entity_vector)
+            else:
+                # Cho relations
+                relation_vector = await vdb.embedding_func(key)
+                entity_similarity = cosine_similarity(query_embedding, relation_vector)
             
-    hl_chunk_list = []
-    for item in csv_string_to_list(hl_text_units_context):
-        if item[0].isdigit():
-            hl_chunk_list.append(item[1])
+            # Tính điểm cho từng chunk của entity/relation
+            for chunk in chunks:
+                # Tính similarity giữa chunk content và query
+                chunk_vector = await vdb.embedding_func(chunk)
+                content_similarity = cosine_similarity(query_embedding, chunk_vector)
+                
+                # Tính điểm theo công thức
+                position_score = 1.0 / (rank + 1)
+                total_score = 0.4 * entity_similarity + 0.5 * content_similarity + 0.1 * position_score
+                
+                # Thêm vào danh sách
+                scored_chunks.append((chunk, total_score))
+                
+            rank += 1
+                
+        # Sắp xếp theo điểm số giảm dần
+        scored_chunks.sort(key=lambda x: x[1], reverse=True)
+        return scored_chunks
+    
+    ll_scored_chunks = []
+    hl_scored_chunks = []
+    
+    if query_param.mode == "local" or query_param.mode == "hybrid":
+        # Tính điểm cho low-level chunks (entities)
+        ll_scored_chunks = await calculate_scores(
+            query=ll_keywords,
+            chunks_mapping=entity_chunks_mapping, 
+            vdb=entities_vdb, 
+            is_entity=True
+        )
+    
+    if query_param.mode == "global" or query_param.mode == "hybrid":
+        # Tính điểm cho high-level chunks (relations)
+        hl_scored_chunks = await calculate_scores(
+            query=hl_keywords,
+            chunks_mapping=relation_chunks_mapping, 
+            vdb=relationships_vdb, 
+            is_entity=False
+        )
+    return (ll_scored_chunks, hl_scored_chunks)
 
-    if query_param.mode == "local":
-        chunk_list = ll_chunk_list
-        return (ll_chunk_list,[])
+    # # ll_chunk_list = []
+    # # for item in csv_string_to_list(ll_text_units_context):
+    # #     if item[0].isdigit():
+    # #         ll_chunk_list.append(item[1])
+            
+    # # hl_chunk_list = []
+    # # for item in csv_string_to_list(hl_text_units_context):
+    # #     if item[0].isdigit():
+    # #         hl_chunk_list.append(item[1])
 
-    elif query_param.mode == "global":
-        chunk_list = hl_chunk_list
-        return ([],hl_chunk_list)
+    # # if query_param.mode == "local":
+    # #     chunk_list = ll_chunk_list
+    # #     return (ll_chunk_list,[])
 
-    else:
-        chunk_list = ll_chunk_list + hl_chunk_list
-    return (ll_chunk_list, hl_chunk_list)
+    # # elif query_param.mode == "global":
+    # #     chunk_list = hl_chunk_list
+    # #     return ([],hl_chunk_list)
+
+    # # else:
+    # #     chunk_list = ll_chunk_list + hl_chunk_list
+    
+    # return (ll_chunk_list, hl_chunk_list)
 
 async def _get_node_data(
     query: str,
@@ -1270,6 +1359,21 @@ async def _get_node_data(
         ),
     )
 
+    entity_chunks_mapping = {}
+    for node in node_datas:
+        entity_name = node["entity_name"]
+        entity_source_ids = split_string_by_multi_markers(node.get("source_id", ""), [GRAPH_FIELD_SEP])
+        
+        # Lấy các chunks liên quan đến entity này
+        entity_chunks = []
+        for text_unit in use_text_units:
+            # text_unit là dictionary chứa trực tiếp content
+            entity_chunks.append(text_unit["content"])
+        
+        # Thêm vào mapping nếu có chunks
+        if entity_chunks:
+            entity_chunks_mapping[entity_name] = entity_chunks
+            
     len_node_datas = len(node_datas)
     node_datas = truncate_list_by_token_size(
         node_datas,
@@ -1333,7 +1437,7 @@ async def _get_node_data(
     for i, t in enumerate(use_text_units):
         text_units_section_list.append([i, t["content"]])
     text_units_context = list_of_list_to_csv(text_units_section_list)
-    return entities_context, relations_context, text_units_context
+    return entities_context, relations_context, text_units_context, entity_chunks_mapping
 
 
 async def _find_most_related_text_unit_from_entities(
@@ -1529,6 +1633,24 @@ async def _get_edge_data(
             edge_datas, query_param, text_chunks_db, knowledge_graph_inst
         ),
     )
+
+    relation_chunks_mapping = {}
+    for edge in edge_datas:
+        # Sử dụng description của relation làm key
+        relation_key = edge.get("description", "").strip()
+        if not relation_key:  # Nếu không có description, tạo key từ src_id và tgt_id
+            relation_key = f"{edge['src_id']}-{edge['tgt_id']}"
+            
+        # Lấy các chunks liên quan đến relation này
+        relation_chunks = []
+        for text_unit in use_text_units:
+            # text_unit là dictionary chứa trực tiếp content
+            relation_chunks.append(text_unit["content"])
+        
+        # Thêm vào mapping nếu có chunks
+        if relation_chunks:
+            relation_chunks_mapping[relation_key] = relation_chunks
+
     logger.info(
         f"Global query uses {len(use_entities)} entites, {len(edge_datas)} relations, {len(use_text_units)} chunks"
     )
@@ -1581,7 +1703,7 @@ async def _get_edge_data(
     for i, t in enumerate(use_text_units):
         text_units_section_list.append([i, t["content"]])
     text_units_context = list_of_list_to_csv(text_units_section_list)
-    return entities_context, relations_context, text_units_context
+    return entities_context, relations_context, text_units_context, relation_chunks_mapping
 
 
 async def _find_most_related_entities_from_relationships(

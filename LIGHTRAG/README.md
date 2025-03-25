@@ -1541,3 +1541,20 @@ primaryClass={cs.IR}
 ```
 
 **Thank you for your interest in our work!**
+
+
+```python
+# Sử dụng LLM (mặc định)
+lightrag.insert("Nội dung tiếng Việt", language="Vietnamese")
+lightrag.insert("English content", language="English")
+
+# Chỉ dùng embedding
+lightrag.insert("Ô tô là phương tiện giao thông phổ biến", language="Vietnamese", matching_method="embedding")
+
+# Chỉ dùng LLM 
+lightrag.insert("Ô tô là phương tiện giao thông phổ biến", language="Vietnamese", matching_method="llm")
+
+# Dùng cả hai
+lightrag.insert("Ô tô là phương tiện giao thông phổ biến", language="Vietnamese", matching_method="hybrid")
+```
+matching_method = [embedding,llm,hybrid,None]

@@ -695,7 +695,7 @@ def get_prompt(prompt_key: str, language: str = "EN") -> str:
     Returns:
         str: The prompt in the specified language
     """
-    if language == "Việt Nam":
+    if language == "Vietnamese":
         # Try to get Vietnamese version first
         vi_key = f"{prompt_key}_VI"
         if vi_key in PROMPTS:

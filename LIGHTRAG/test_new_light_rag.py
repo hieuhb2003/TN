@@ -121,7 +121,7 @@ rag = LightRAG(
     ),
     addon_params={
         "insert_batch_size": 20,
-        "language": "Việt Name"
+        "language": "Vietnamese"
     }
 )
 
