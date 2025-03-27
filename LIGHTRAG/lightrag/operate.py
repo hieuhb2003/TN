@@ -24,9 +24,9 @@ from .utils import (
     statistic_data,
     get_conversation_turns,
     csv_string_to_list,
-    detect_language,
-    cosine_similarity
+    detect_language
 )
+import numpy as np
 from .base import (
     BaseGraphStorage,
     BaseKVStorage,
@@ -1224,54 +1224,72 @@ async def _build_retrieval_context(
             ll_entities_context,
             ll_relations_context,
             ll_text_units_context,
-            ll_entity_chunks_mapping,
+            entity_chunks_mapping,
         ) = ll_data
 
         (
             hl_entities_context,
             hl_relations_context,
             hl_text_units_context,
-            hl_relation_chunks_mapping,
+            relation_chunks_mapping,
         ) = hl_data
 
+    from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine_similarity
+
     async def calculate_scores(query, chunks_mapping, vdb, is_entity=True):
-        # Lấy embedding của query
-        query_embedding = await vdb.embedding_func(query)
+        # Get query embedding once
+        query_embedding = await vdb.embedding_func([query])
+        query_embedding = query_embedding[0].reshape(1, -1)  # Reshape for sklearn
         
-        # Tính điểm cho từng chunk
+        # Batch process all texts that need embeddings
+        all_texts = []
+        text_to_key = {}
+        
+        for key, chunks in chunks_mapping.items():
+            all_texts.append(key)
+            text_to_key[key] = key
+            for chunk in chunks:
+                all_texts.append(chunk)
+                text_to_key[chunk] = chunk
+                
+        # Get embeddings in batches
+        batch_size = vdb._max_batch_size
+        embeddings_map = {}
+        
+        for i in range(0, len(all_texts), batch_size):
+            batch_texts = all_texts[i:i + batch_size]
+            batch_embeddings = await vdb.embedding_func(batch_texts)
+            
+            for text, embedding in zip(batch_texts, batch_embeddings):
+                embeddings_map[text_to_key[text]] = embedding
+### first version all chunk in one entity is the same rank
+### now version is score by ranking chunk by entity 
+        # Calculate scores
         scored_chunks = []
         rank = 0
         
         for key, chunks in chunks_mapping.items():
-            # Tính similarity giữa entity/relation và query
-            if is_entity:
-                # Cho entities
-                entity_vector = await vdb.embedding_func(key)
-                entity_similarity = cosine_similarity(query_embedding, entity_vector)
-            else:
-                # Cho relations
-                relation_vector = await vdb.embedding_func(key)
-                entity_similarity = cosine_similarity(query_embedding, relation_vector)
-            
-            # Tính điểm cho từng chunk của entity/relation
+            # Get cached embedding for entity/relation
+            item_embedding = embeddings_map[key].reshape(1, -1)  # Reshape for sklearn
+            item_similarity = sklearn_cosine_similarity(query_embedding, item_embedding)[0][0]
+            # rank = 0
+            # Calculate scores for each chunk
             for chunk in chunks:
-                # Tính similarity giữa chunk content và query
-                chunk_vector = await vdb.embedding_func(chunk)
-                content_similarity = cosine_similarity(query_embedding, chunk_vector)
+                chunk_embedding = embeddings_map[chunk].reshape(1, -1)  # Reshape for sklearn
+                content_similarity = sklearn_cosine_similarity(query_embedding, chunk_embedding)[0][0]
                 
-                # Tính điểm theo công thức
                 position_score = 1.0 / (rank + 1)
-                total_score = 0.4 * entity_similarity + 0.5 * content_similarity + 0.1 * position_score
-                
-                # Thêm vào danh sách
+                total_score = 0.4 * item_similarity + 0.5 * content_similarity + 0.1 * position_score 
+                rank += 1
                 scored_chunks.append((chunk, total_score))
                 
-            rank += 1
-                
-        # Sắp xếp theo điểm số giảm dần
+            
+                    
         scored_chunks.sort(key=lambda x: x[1], reverse=True)
         return scored_chunks
-    
+
+    # print("da den day chua")
+
     ll_scored_chunks = []
     hl_scored_chunks = []
     
@@ -1283,7 +1301,7 @@ async def _build_retrieval_context(
             vdb=entities_vdb, 
             is_entity=True
         )
-    
+    # print("chac la den day roi")
     if query_param.mode == "global" or query_param.mode == "hybrid":
         # Tính điểm cho high-level chunks (relations)
         hl_scored_chunks = await calculate_scores(
@@ -1292,30 +1310,8 @@ async def _build_retrieval_context(
             vdb=relationships_vdb, 
             is_entity=False
         )
+    # print("den day di pls")
     return (ll_scored_chunks, hl_scored_chunks)
-
-    # # ll_chunk_list = []
-    # # for item in csv_string_to_list(ll_text_units_context):
-    # #     if item[0].isdigit():
-    # #         ll_chunk_list.append(item[1])
-            
-    # # hl_chunk_list = []
-    # # for item in csv_string_to_list(hl_text_units_context):
-    # #     if item[0].isdigit():
-    # #         hl_chunk_list.append(item[1])
-
-    # # if query_param.mode == "local":
-    # #     chunk_list = ll_chunk_list
-    # #     return (ll_chunk_list,[])
-
-    # # elif query_param.mode == "global":
-    # #     chunk_list = hl_chunk_list
-    # #     return ([],hl_chunk_list)
-
-    # # else:
-    # #     chunk_list = ll_chunk_list + hl_chunk_list
-    
-    # return (ll_chunk_list, hl_chunk_list)
 
 async def _get_node_data(
     query: str,
@@ -1329,6 +1325,8 @@ async def _get_node_data(
         f"Query nodes: {query}, top_k: {query_param.top_k}, cosine: {entities_vdb.cosine_better_than_threshold}"
     )
     results = await entities_vdb.query(query, top_k=query_param.top_k)
+
+
     if not len(results):
         return "", "", ""
     # get entity information
@@ -1372,7 +1370,7 @@ async def _get_node_data(
         
         # Thêm vào mapping nếu có chunks
         if entity_chunks:
-            entity_chunks_mapping[entity_name] = entity_chunks
+            entity_chunks_mapping[entity_name] = entity_chunks[:6]
             
     len_node_datas = len(node_datas)
     node_datas = truncate_list_by_token_size(
@@ -1634,6 +1632,7 @@ async def _get_edge_data(
         ),
     )
 
+
     relation_chunks_mapping = {}
     for edge in edge_datas:
         # Sử dụng description của relation làm key
@@ -1649,7 +1648,7 @@ async def _get_edge_data(
         
         # Thêm vào mapping nếu có chunks
         if relation_chunks:
-            relation_chunks_mapping[relation_key] = relation_chunks
+            relation_chunks_mapping[relation_key] = relation_chunks[:6]
 
     logger.info(
         f"Global query uses {len(use_entities)} entites, {len(edge_datas)} relations, {len(use_text_units)} chunks"
