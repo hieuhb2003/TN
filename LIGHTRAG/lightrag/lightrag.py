@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import partial
 from typing import Any, AsyncIterator, Callable, Iterator, cast
+from sklearn.metrics.pairwise import cosine_similarity  
+import numpy as np        
 import re
 from .base import (
     BaseGraphStorage,
@@ -931,22 +933,98 @@ class LightRAG:
             logger.error(f"Failed to extract entities and relationships: {e}")
             raise e
     
+    # async def _link_cross_lingual_entities(
+    #     self, 
+    #     new_entities: list[str], 
+    #     source_language: str = "Vietnamese",
+    #     matching_method: str = "hybrid"  # Thêm tham số này
+    # ) -> None:
+    #     """
+    #     Try to find matches for new entities in other languages and create cross-lingual links
+    #     """
+    #     if not new_entities:
+    #         return
+            
+    #     logger.info(f"Looking for cross-lingual matches for {len(new_entities)} new entities")
+        
+    #     # Tìm các entities trong các ngôn ngữ khác
+    #     existing_entities = []
+    #     for node in self.chunk_entity_relation_graph._graph.nodes():
+    #         if node in new_entities:
+    #             continue
+                
+    #         node_data = self.chunk_entity_relation_graph._graph.nodes[node]
+    #         entity_language = node_data.get("language", "")
+            
+    #         # Xác định ngôn ngữ của entity
+    #         if not entity_language:
+    #             for u, v, edge_data in self.chunk_entity_relation_graph._graph.edges(data=True):
+    #                 if u == node or v == node:
+    #                     if edge_data.get("relation_type") == "translation_equivalent":
+    #                         if edge_data.get("original_language") and edge_data.get("original_language") != source_language:
+    #                             entity_language = edge_data.get("original_language")
+    #                             break
+    #                         elif edge_data.get("translated_language") and edge_data.get("translated_language") != source_language:
+    #                             entity_language = edge_data.get("translated_language")
+    #                             break
+            
+    #         if entity_language and entity_language != source_language:
+    #             existing_entities.append((node, entity_language))
+        
+    #     # Group entities by language
+    #     entities_by_language = {}
+    #     for entity, language in existing_entities:
+    #         if language not in entities_by_language:
+    #             entities_by_language[language] = []
+    #         entities_by_language[language].append(entity)
+        
+    #     # Match và link cho từng ngôn ngữ
+    #     for target_language, target_entities in entities_by_language.items():
+    #         entity_pairs = await self._match_entities_for_linking(
+    #             new_entities, 
+    #             target_entities,
+    #             source_language,
+    #             target_language,
+    #             matching_method=matching_method  # Truyền method vào
+    #         )
+            
+    #         if entity_pairs:
+    #             await self._add_cross_lingual_links(
+    #                 entity_pairs, 
+    #                 source_language, 
+    #                 target_language
+    #             )
     async def _link_cross_lingual_entities(
         self, 
         new_entities: list[str], 
         source_language: str = "Vietnamese",
-        matching_method: str = "hybrid"  # Thêm tham số này
+        matching_method: str = "hybrid"
     ) -> None:
-        """
-        Try to find matches for new entities in other languages and create cross-lingual links
-        """
         if not new_entities:
             return
-            
+                
         logger.info(f"Looking for cross-lingual matches for {len(new_entities)} new entities")
+        
+        # Track đã match để tránh match lại
+        already_matched_entities = set()
+        
+        # Lấy tất cả các translation links hiện có
+        for u, v, edge_data in self.chunk_entity_relation_graph._graph.edges(data=True):
+            if edge_data.get("relation_type") == "translation_equivalent":
+                already_matched_entities.add(u)
+                already_matched_entities.add(v)
+        print()
+        # Lọc ra các entities chưa có translation
+        new_entities = [e for e in new_entities if e not in already_matched_entities]
+        
+        if not new_entities:
+            logger.info("All entities already have translations")
+            return
         
         # Tìm các entities trong các ngôn ngữ khác
         existing_entities = []
+        existing_entity_languages = {}
+        
         for node in self.chunk_entity_relation_graph._graph.nodes():
             if node in new_entities:
                 continue
@@ -956,22 +1034,16 @@ class LightRAG:
             
             # Xác định ngôn ngữ của entity
             if not entity_language:
-                for u, v, edge_data in self.chunk_entity_relation_graph._graph.edges(data=True):
-                    if u == node or v == node:
-                        if edge_data.get("relation_type") == "translation_equivalent":
-                            if edge_data.get("original_language") and edge_data.get("original_language") != source_language:
-                                entity_language = edge_data.get("original_language")
-                                break
-                            elif edge_data.get("translated_language") and edge_data.get("translated_language") != source_language:
-                                entity_language = edge_data.get("translated_language")
-                                break
+                entity_language = self._detect_entity_language(node)
             
             if entity_language and entity_language != source_language:
-                existing_entities.append((node, entity_language))
+                existing_entities.append(node)
+                existing_entity_languages[node] = entity_language
         
         # Group entities by language
         entities_by_language = {}
-        for entity, language in existing_entities:
+        for entity in existing_entities:
+            language = existing_entity_languages[entity]
             if language not in entities_by_language:
                 entities_by_language[language] = []
             entities_by_language[language].append(entity)
@@ -983,7 +1055,7 @@ class LightRAG:
                 target_entities,
                 source_language,
                 target_language,
-                matching_method=matching_method  # Truyền method vào
+                matching_method=matching_method
             )
             
             if entity_pairs:
@@ -993,6 +1065,16 @@ class LightRAG:
                     target_language
                 )
 
+    async def _detect_entity_language(self, entity: str) -> str:
+        """Helper function to detect entity language from its edges"""
+        for u, v, edge_data in self.chunk_entity_relation_graph._graph.edges(data=True):
+            if u == entity or v == entity:
+                if edge_data.get("relation_type") == "translation_equivalent":
+                    if edge_data.get("original_language"):
+                        return edge_data.get("original_language")
+                    elif edge_data.get("translated_language"):
+                        return edge_data.get("translated_language")
+        return ""
     async def _match_entities_for_linking(
         self, 
         source_entities: list[str], 
@@ -1067,30 +1149,295 @@ class LightRAG:
         target_entities: list[str],
         source_language: str,
         target_language: str,
-        similarity_threshold: float
+        similarity_threshold: float = 0.80
     ) -> list[tuple[str, str]]:
-        """Match entities using embedding similarity"""
+        """Match entities using embedding similarity directly from vector database"""
         matches = []
+        match_similarities = []  # Store similarity scores
         
-        # Tạo embeddings cho source và target entities
-        source_embeddings = await self.embedding_func([
-            e.strip('"') for e in source_entities
-        ])
-        target_embeddings = await self.embedding_func([
-            e.strip('"') for e in target_entities
-        ])
+        # Format entity names correctly for proper ID generation
+        source_entities_formatted = [f'"{e.strip().upper()}"' if not e.strip().startswith('"') else e.strip() for e in source_entities]
+        target_entities_formatted = [f'"{e.strip().upper()}"' if not e.strip().startswith('"') else e.strip() for e in target_entities]
         
-        # Tính cosine similarity
-        from sklearn.metrics.pairwise import cosine_similarity
-        similarities = cosine_similarity(source_embeddings, target_embeddings)
+        # Get entity IDs
+        source_entity_ids = [compute_mdhash_id(e, prefix="ent-") for e in source_entities_formatted]
+        target_entity_ids = [compute_mdhash_id(e, prefix="ent-") for e in target_entities_formatted]
         
-        # Tìm matches dựa trên threshold
-        for i, source_entity in enumerate(source_entities):
+        # Fetch embeddings directly from vector database
+        source_embeddings = []
+        valid_source_indices = []
+        
+        for i, entity_id in enumerate(source_entity_ids):
+            vector = await self.entities_vdb.get_entity_embedding_by_id(entity_id)
+            if vector is not None:
+                source_embeddings.append(vector)
+                valid_source_indices.append(i)
+        
+        target_embeddings = []
+        valid_target_indices = []
+        
+        for i, entity_id in enumerate(target_entity_ids):
+            vector = await self.entities_vdb.get_entity_embedding_by_id(entity_id)
+            if vector is not None:
+                target_embeddings.append(vector)
+                valid_target_indices.append(i)
+        
+        if not source_embeddings or not target_embeddings:
+            logger.warning("No valid entity embeddings found for comparison")
+            return matches
+
+        # Convert to numpy arrays for similarity computation
+        source_embeddings_np = np.array(source_embeddings)
+        target_embeddings_np = np.array(target_embeddings)
+        
+        # Compute cosine similarity
+        similarities = cosine_similarity(source_embeddings_np, target_embeddings_np)
+        
+        # Find matches based on similarity threshold
+        for i, source_idx in enumerate(valid_source_indices):
             max_sim_idx = similarities[i].argmax()
             if similarities[i][max_sim_idx] >= similarity_threshold:
-                matches.append((source_entity, target_entities[max_sim_idx]))
+                source_entity = source_entities[source_idx]
+                target_entity = target_entities[valid_target_indices[max_sim_idx]]
+                similarity_score = float(similarities[i][max_sim_idx])
                 
+                # Add to results for high similarity
+                matches.append((source_entity, target_entity))
+                match_similarities.append(similarity_score)  # Store the similarity score
+                
+                logger.info(
+                    f"Matched entities: {source_entity} <-> {target_entity}\n"
+                    f"Similarity: {similarity_score:.3f}"
+                )
+                
+                # Get node data for logging
+                source_node_data = await self.chunk_entity_relation_graph.get_node(source_entities_formatted[source_idx])
+                target_node_data = await self.chunk_entity_relation_graph.get_node(target_entities_formatted[valid_target_indices[max_sim_idx]])
+                
+                if source_node_data and target_node_data:
+                    source_desc = source_node_data.get("description", "No description")
+                    target_desc = target_node_data.get("description", "No description")
+                    logger.debug(
+                        f"Language pair: {source_language} -> {target_language}\n"
+                        f"Source description: {source_desc[:100]}...\n"
+                        f"Target description: {target_desc[:100]}..."
+                    )
+        
+        # Store matched pairs in JSON if matches were found
+        if matches:
+            await self._store_matched_pairs_json(
+                matches,
+                match_similarities,  # Pass the similarity scores
+                source_entities_formatted,
+                target_entities_formatted,
+                valid_source_indices,
+                valid_target_indices,
+                source_language,
+                target_language
+            )
+            
         return matches
+
+    async def _store_matched_pairs_json(
+        self,
+        matches: list[tuple[str, str]],
+        match_similarities: list[float],  # Add similarity scores parameter
+        source_entities_formatted: list[str],
+        target_entities_formatted: list[str],
+        valid_source_indices: list[int],
+        valid_target_indices: list[int],
+        source_language: str,
+        target_language: str
+    ) -> None:
+        """
+        Store matched entity pairs in a JSON file
+        
+        Args:
+            matches: List of matched entity pairs (source_entity, target_entity)
+            match_similarities: List of similarity scores for each matched pair
+            source_entities_formatted: Formatted source entity names
+            target_entities_formatted: Formatted target entity names
+            valid_source_indices: Valid indices for source entities
+            valid_target_indices: Valid indices for target entities
+            source_language: Source language name
+            target_language: Target language name
+        """
+        import os
+        import json
+        from datetime import datetime
+        
+        # Create output directory if it doesn't exist
+        output_dir = os.path.join(self.working_dir, "matched_pairs")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Generate timestamp for the filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = os.path.join(output_dir, f"matched_pairs_{source_language}_{target_language}_{timestamp}.json")
+        
+        # Create dictionary to map source entities to their indices
+        source_entity_idx_map = {}
+        for idx, entity_idx in enumerate(valid_source_indices):
+            source_entity = source_entities_formatted[entity_idx].strip('"')
+            source_entity_idx_map[source_entity] = idx
+            
+        # Create dictionary to map target entities to their indices
+        target_entity_idx_map = {}
+        for idx, entity_idx in enumerate(valid_target_indices):
+            target_entity = target_entities_formatted[entity_idx].strip('"')
+            target_entity_idx_map[target_entity] = idx
+        
+        # Create list to store pairs with descriptions
+        pairs_with_descriptions = []
+        
+        for i, (source_entity, target_entity) in enumerate(matches):
+            # Get formatted entity names
+            source_entity_formatted = source_entities_formatted[
+                valid_source_indices[source_entity_idx_map.get(source_entity.strip('"'), 0)]
+            ]
+            target_entity_formatted = target_entities_formatted[
+                valid_target_indices[target_entity_idx_map.get(target_entity.strip('"'), 0)]
+            ]
+            
+            # Get entity data from graph
+            source_node_data = await self.chunk_entity_relation_graph.get_node(source_entity_formatted)
+            target_node_data = await self.chunk_entity_relation_graph.get_node(target_entity_formatted)
+            
+            # Prepare pair data with descriptions
+            pair_data = {
+                "original_entity": {
+                    "name": source_entity.strip('"'),
+                    "description": source_node_data.get("description", "No description") if source_node_data else "No description",
+                    "language": source_language
+                },
+                "translated_entity": {
+                    "name": target_entity.strip('"'),
+                    "description": target_node_data.get("description", "No description") if target_node_data else "No description",
+                    "language": target_language
+                },
+                "similarity_score": match_similarities[i]  # Use the actual similarity score
+            }
+            
+            pairs_with_descriptions.append(pair_data)
+        
+        # Write to JSON file
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(pairs_with_descriptions, f, ensure_ascii=False, indent=2)
+            
+        logger.info(f"Stored {len(pairs_with_descriptions)} entity pairs in {output_file}")
+        
+        return output_file
+
+    def get_matched_pairs_files(self, source_language: str = None, target_language: str = None) -> list[str]:
+        """
+        Get a list of all stored matched pairs JSON files, optionally filtered by language pair.
+        
+        Args:
+            source_language: Optional filter by source language
+            target_language: Optional filter by target language
+            
+        Returns:
+            List of file paths to matched pairs JSON files
+        """
+        import os
+        
+        output_dir = os.path.join(self.working_dir, "matched_pairs")
+        if not os.path.exists(output_dir):
+            logger.warning("No matched pairs directory found")
+            return []
+            
+        all_files = [
+            os.path.join(output_dir, f) 
+            for f in os.listdir(output_dir) 
+            if f.startswith("matched_pairs_") and f.endswith(".json")
+        ]
+        
+        # Filter by language if specified
+        if source_language and target_language:
+            filtered_files = [
+                f for f in all_files 
+                if f"matched_pairs_{source_language}_{target_language}_" in os.path.basename(f)
+            ]
+            return filtered_files
+        elif source_language:
+            filtered_files = [
+                f for f in all_files 
+                if f"matched_pairs_{source_language}_" in os.path.basename(f)
+            ]
+            return filtered_files
+        elif target_language:
+            filtered_files = [
+                f for f in all_files 
+                if f"_{target_language}_" in os.path.basename(f)
+            ]
+            return filtered_files
+        
+        return sorted(all_files)
+        
+    def load_matched_pairs(self, file_path: str) -> list[dict]:
+        """
+        Load matched pairs data from a JSON file
+        
+        Args:
+            file_path: Path to the JSON file
+            
+        Returns:
+            List of matched pairs with descriptions
+        """
+        import json
+        import os
+        
+        if not os.path.exists(file_path):
+            logger.error(f"File not found: {file_path}")
+            return []
+            
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading JSON file: {e}")
+            return []
+            
+    def get_matched_entity_pairs(
+        self, 
+        source_language: str = None, 
+        target_language: str = None, 
+        latest_only: bool = True
+    ) -> list[dict]:
+        """
+        Convenience method to retrieve matched entity pairs
+        
+        Args:
+            source_language: Optional filter by source language
+            target_language: Optional filter by target language
+            latest_only: If True, returns only pairs from the most recent file,
+                         otherwise returns all pairs from all matching files
+            
+        Returns:
+            List of matched pairs with descriptions
+        """
+        matched_files = self.get_matched_pairs_files(
+            source_language=source_language,
+            target_language=target_language
+        )
+        
+        if not matched_files:
+            logger.warning(f"No matched pairs files found for the specified languages")
+            return []
+            
+        if latest_only:
+            # Get only the most recent file
+            latest_file = sorted(matched_files)[-1]
+            logger.info(f"Loading matched pairs from latest file: {os.path.basename(latest_file)}")
+            return self.load_matched_pairs(latest_file)
+        else:
+            # Combine pairs from all matching files
+            all_pairs = []
+            for file_path in matched_files:
+                pairs = self.load_matched_pairs(file_path)
+                all_pairs.extend(pairs)
+            
+            logger.info(f"Loaded {len(all_pairs)} pairs from {len(matched_files)} files")
+            return all_pairs
 
     async def _match_entities_llm(
         self,
@@ -2047,3 +2394,1197 @@ class LightRAG:
         self.addon_params["language"] = language
         logger.info(f"Language set to: {language}")
 
+# new_func
+    def insert_duo(
+        self,
+        data_original,
+        data_translated=None,
+        source_language="Vietnamese",
+        target_language="English",
+        store_translations=True,
+        translation_db_path=None
+    ):
+        """
+        Insert a document in both its original language and translated version.
+        
+        Args:
+            data_original: Original document data (Vietnamese)
+            data_translated: Translated document data (if None, will be generated using LLM)
+            source_language: Source language (default: "Vietnamese")
+            target_language: Target language (default: "English")
+            store_translations: Whether to store entity and relation translations
+            translation_db_path: Path to store translation mappings (defaults to working_dir/translations.json)
+        
+        Returns:
+            Tuple of (original_doc_id, translated_doc_id)
+        """
+        loop = always_get_an_event_loop()
+        return loop.run_until_complete(
+            self.ainsert_duo(data_original, data_translated, source_language, target_language, store_translations, translation_db_path)
+        )
+
+    async def ainsert_duo(
+        self,
+        data_original,
+        data_translated=None,
+        source_language="Vietnamese",
+        target_language="English",
+        store_translations=True,
+        translation_db_path=None
+    ):
+        """
+        Async insert a document in both its original language and translated version.
+        Ensures exact 1:1 mapping between entities and relationships.
+        
+        Args:
+            data_original: Original document data (Vietnamese)
+            data_translated: Translated document data (if None, will be generated using LLM)
+            source_language: Source language (default: "Vietnamese")
+            target_language: Target language (default: "English")
+            store_translations: Whether to store entity and relation translations
+            translation_db_path: Path to store translation mappings (defaults to working_dir/translations.json)
+        
+        Returns:
+            Tuple of (original_doc_id, translated_doc_id)
+        """
+        if translation_db_path is None:
+            translation_db_path = os.path.join(self.working_dir, "translations.json")
+        
+        logger.info(f"Starting duo insertion: {source_language} and {target_language}")
+        
+        # First process the original document
+        original_doc_id = compute_mdhash_id(data_original.strip(), prefix="doc-")
+        
+        # Store original document in doc status first
+        await self.doc_status.upsert({
+            original_doc_id: {
+                "content": data_original,
+                "content_summary": self._get_content_summary(data_original),
+                "content_length": len(data_original),
+                "status": DocStatus.PENDING,
+                "language": source_language,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+            }
+        })
+        
+        # Store data to full_docs
+        await self.full_docs.upsert({original_doc_id: {"content": data_original.strip()}})
+        
+        # Create chunks for original document
+        original_chunks = {
+            compute_mdhash_id(dp["content"], prefix="chunk-"): {
+                **dp,
+                "full_doc_id": original_doc_id,
+            }
+            for dp in self.chunking_func(
+                data_original,
+                None,
+                False,
+                self.chunk_overlap_token_size,
+                self.chunk_token_size,
+                self.tiktoken_model_name,
+            )
+        }
+        
+        # Process the chunks and extract entities/relations
+        # Insert chunks to vector storage and text chunks storage
+        await asyncio.gather(
+            self.chunks_vdb.upsert(original_chunks),
+            self.text_chunks.upsert(original_chunks),
+        )
+        
+        # Extract entities and relations from original document
+        logger.info(f"Extracting entities and relations from {source_language} document")
+        original_extraction_result = await extract_entities(
+            original_chunks,
+            knowledge_graph_inst=self.chunk_entity_relation_graph,
+            entity_vdb=self.entities_vdb,
+            relationships_vdb=self.relationships_vdb,
+            llm_response_cache=self.llm_response_cache,
+            global_config=asdict(self),
+        )
+        
+        # Get entities and relations from the original document
+        original_entities = await self._get_document_entities(original_doc_id, original_chunks)
+        original_relations = await self._get_document_relations(original_doc_id, original_chunks)
+        
+        logger.info(f"Found {len(original_entities)} entities and {len(original_relations)} relations in {source_language} document")
+        
+        # Update status for original document
+        await self.doc_status.upsert({
+            original_doc_id: {
+                "status": DocStatus.PROCESSED,
+                "chunks_count": len(original_chunks),
+                "content": data_original,
+                "content_summary": self._get_content_summary(data_original),
+                "content_length": len(data_original),
+                "updated_at": datetime.now().isoformat(),
+            }
+        })
+        
+        # If translated data is not provided, generate it
+        if data_translated is None or data_translated == "":
+            logger.info(f"Generating translation for document in {target_language}")
+            data_translated = await self._translate_preserving_structure(
+                data_original, 
+                source_language,
+                target_language
+            )
+        
+        # Process translated document
+        translated_doc_id = compute_mdhash_id(data_translated.strip(), prefix="doc-")
+        
+        # Store translated document in doc status
+        await self.doc_status.upsert({
+            translated_doc_id: {
+                "content": data_translated,
+                "content_summary": self._get_content_summary(data_translated),
+                "content_length": len(data_translated),
+                "status": DocStatus.PENDING,
+                "language": target_language,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+            }
+        })
+        
+        # Store data for translated document
+        await self.full_docs.upsert({translated_doc_id: {"content": data_translated.strip()}})
+        
+        # Create chunks for translated document
+        translated_chunks = {
+            compute_mdhash_id(dp["content"], prefix="chunk-"): {
+                **dp,
+                "full_doc_id": translated_doc_id,
+            }
+            for dp in self.chunking_func(
+                data_translated,
+                None,
+                False,
+                self.chunk_overlap_token_size,
+                self.chunk_token_size,
+                self.tiktoken_model_name,
+            )
+        }
+        
+        # Insert chunks to vector storage and text chunks storage
+        await asyncio.gather(
+            self.chunks_vdb.upsert(translated_chunks),
+            self.text_chunks.upsert(translated_chunks),
+        )
+        
+        # Extract corresponding entities and relations in the translated document
+        # using the original entities as a guide
+        logger.info(f"Extracting matching entities and relations from {target_language} document")
+        
+        # First pass: Extract matching entities - ONLY EXTRACT, DON'T SAVE YET
+        translated_entities = await self._extract_matching_entities(
+            original_entities,
+            data_translated,
+            source_language,
+            target_language,
+            translated_chunks
+        )
+        
+        # Second pass: Extract matching relations - ONLY EXTRACT, DON'T SAVE YET
+        translated_relations = await self._extract_matching_relations(
+            original_relations,
+            translated_entities,
+            data_translated,
+            source_language,
+            target_language,
+            translated_chunks
+        )
+        
+        logger.info(f"Extracted {len(translated_entities)} entities and {len(translated_relations)} relations in {target_language} document")
+        
+        # Verify the counts match
+        if len(original_entities) != len(translated_entities):
+            logger.warning(f"Entity count mismatch: {len(original_entities)} {source_language} vs {len(translated_entities)} {target_language}")
+            # Force entity count to match by requesting a fix
+            translated_entities = await self._fix_entity_count_mismatch(
+                original_entities,
+                translated_entities,
+                data_translated,
+                source_language,
+                target_language,
+                translated_chunks
+            )
+        
+        if len(original_relations) != len(translated_relations):
+            logger.warning(f"Relation count mismatch: {len(original_relations)} {source_language} vs {len(translated_relations)} {target_language}")
+            # Force relation count to match by requesting a fix
+            translated_relations = await self._fix_relation_count_mismatch(
+                original_relations,
+                translated_relations, 
+                translated_entities,
+                data_translated,
+                source_language, 
+                target_language,
+                translated_chunks
+            )
+        
+        # NOW THAT WE HAVE VERIFIED ENTITIES AND RELATIONS MATCH, SAVE THEM TO THE GRAPH
+        logger.info(f"Saving verified entities and relations to knowledge graph")
+        
+        # Save entities to graph and vector DB
+        for entity in translated_entities:
+            entity_name = f'"{entity["name"].upper()}"'
+            
+            # Get first chunk ID for this document
+            chunk_id = next(iter(translated_chunks.keys()))
+            
+            # Create node data
+            node_data = {
+                "entity_type": f'"{entity["type"].upper()}"',
+                "description": entity["description"],
+                "source_id": chunk_id,
+                "language": target_language,  # Add language metadata
+            }
+            
+            # Add to knowledge graph
+            await self.chunk_entity_relation_graph.upsert_node(entity_name, node_data)
+            
+            # Add to vector database
+            entity_id = compute_mdhash_id(entity_name, prefix="ent-")
+            await self.entities_vdb.upsert({
+                entity_id: {
+                    "content": f"{entity_name} {entity['description']}",
+                    "entity_name": entity_name,
+                    "language": target_language,  # Add language metadata
+                }
+            })
+        
+        # Save relations to graph and vector DB
+        for relation in translated_relations:
+            src_entity = f'"{relation["source"].upper()}"'
+            tgt_entity = f'"{relation["target"].upper()}"'
+            
+            # Get first chunk ID for this document
+            chunk_id = next(iter(translated_chunks.keys()))
+            
+            # Create edge data
+            edge_data = {
+                "description": relation["description"],
+                "keywords": relation["keywords"],
+                "weight": 1.0,
+                "source_id": chunk_id,
+                "language": target_language,  # Add language metadata
+            }
+            
+            # Ensure both nodes exist
+            for entity in [src_entity, tgt_entity]:
+                if not await self.chunk_entity_relation_graph.has_node(entity):
+                    # Create placeholder node
+                    placeholder_data = {
+                        "entity_type": '"UNKNOWN"',
+                        "description": "Auto-created entity for relation",
+                        "source_id": chunk_id,
+                        "language": target_language,  # Add language metadata
+                    }
+                    await self.chunk_entity_relation_graph.upsert_node(entity, placeholder_data)
+            
+            # Add edge to knowledge graph
+            await self.chunk_entity_relation_graph.upsert_edge(src_entity, tgt_entity, edge_data)
+            
+            # Add to vector database
+            relation_id = compute_mdhash_id(src_entity + tgt_entity, prefix="rel-")
+            await self.relationships_vdb.upsert({
+                relation_id: {
+                    "content": f"{relation['keywords']} {src_entity} {tgt_entity} {relation['description']}",
+                    "src_id": src_entity,
+                    "tgt_id": tgt_entity,
+                    "language": target_language,  # Add language metadata
+                }
+            })
+        
+        # Update status for translated document
+        await self.doc_status.upsert({
+            translated_doc_id: {
+                "status": DocStatus.PROCESSED,
+                "chunks_count": len(translated_chunks),
+                "content": data_translated,
+                "content_summary": self._get_content_summary(data_translated),
+                "content_length": len(data_translated),
+                "updated_at": datetime.now().isoformat(),
+            }
+        })
+        
+        # Create cross-lingual edges between entities
+        logger.info(f"Creating cross-lingual edges between {source_language} and {target_language} entities")
+        await self._create_cross_lingual_edges(
+            original_entities,
+            translated_entities,
+            source_language,
+            target_language
+        )
+        
+        # Store translation pairs if requested
+        if store_translations:
+            logger.info(f"Storing translation pairs to {translation_db_path}")
+            await self._store_translation_pairs(
+                original_entities,
+                translated_entities,
+                original_relations,
+                translated_relations,
+                source_language,
+                target_language,
+                translation_db_path
+            )
+        
+        # Save changes to all storages
+        await self._insert_done()
+        
+        return original_doc_id, translated_doc_id
+
+    async def _get_document_entities(self, doc_id: str, chunks: dict = None) -> list[dict]:
+        """
+        Get entities associated with a specific document.
+        
+        Args:
+            doc_id: Document ID
+            chunks: Optional dictionary of chunks to use for matching
+            
+        Returns:
+            List of entity dictionaries with name, type, and description
+        """
+        # Get all chunks for this document if not provided
+        if chunks is None:
+            doc_chunks = {}
+            chunks_data = await self.text_chunks.get_all()
+            for chunk_id, chunk_data in chunks_data.items():
+                if chunk_data.get('full_doc_id') == doc_id:
+                    doc_chunks[chunk_id] = chunk_data
+        else:
+            doc_chunks = chunks
+        
+        if not doc_chunks:
+            logger.warning(f"No chunks found for document {doc_id}")
+            return []
+        
+        # Get entities that have these chunks as source
+        all_nodes = self.chunk_entity_relation_graph._graph.nodes(data=True)
+        doc_entities = []
+        
+        for node_id, data in all_nodes:
+            if 'source_id' in data:
+                # Check if any source is from the document's chunks
+                sources = data['source_id'].split(GRAPH_FIELD_SEP)
+                for chunk_id in doc_chunks:
+                    if chunk_id in sources:
+                        # Add entity with its metadata
+                        entity_data = {
+                            "name": node_id.strip('"'),
+                            "type": data.get('entity_type', '').strip('"'),
+                            "description": data.get('description', '')
+                        }
+                        doc_entities.append(entity_data)
+                        break
+        
+        return doc_entities
+
+    async def _get_document_relations(self, doc_id: str, chunks: dict = None) -> list[dict]:
+        """
+        Get relations associated with a specific document.
+        
+        Args:
+            doc_id: Document ID
+            chunks: Optional dictionary of chunks to use for matching
+            
+        Returns:
+            List of relation dictionaries with source, target, and description
+        """
+        # Get all chunks for this document if not provided
+        if chunks is None:
+            doc_chunks = {}
+            chunks_data = await self.text_chunks.get_all()
+            for chunk_id, chunk_data in chunks_data.items():
+                if chunk_data.get('full_doc_id') == doc_id:
+                    doc_chunks[chunk_id] = chunk_data
+        else:
+            doc_chunks = chunks
+        
+        if not doc_chunks:
+            logger.warning(f"No chunks found for document {doc_id}")
+            return []
+        
+        # Get relations that have these chunks as source
+        all_edges = self.chunk_entity_relation_graph._graph.edges(data=True)
+        doc_relations = []
+        
+        for src, tgt, data in all_edges:
+            if 'source_id' in data:
+                # Check if any source is from the document's chunks
+                sources = data['source_id'].split(GRAPH_FIELD_SEP)
+                for chunk_id in doc_chunks:
+                    if chunk_id in sources:
+                        # Add relation with its metadata
+                        relation_data = {
+                            "source": src.strip('"'),
+                            "target": tgt.strip('"'),
+                            "description": data.get('description', ''),
+                            "keywords": data.get('keywords', '')
+                        }
+                        doc_relations.append(relation_data)
+                        break
+        
+        return doc_relations
+
+    async def _translate_preserving_structure(
+        self, content: str, source_language: str, target_language: str
+    ) -> str:
+        """
+        Translate content while preserving semantic structure.
+        
+        Args:
+            content: Content to translate
+            source_language: Source language
+            target_language: Target language
+            
+        Returns:
+            Translated content
+        """
+        prompt = f"""
+        You are a professional translator specialized in {source_language}-to-{target_language} translation.
+        
+        Please translate the following {source_language} text into {target_language}.
+        Your translation must:
+        1. Maintain the exact same meaning and information as the original
+        2. Preserve all named entities (people, organizations, locations, etc.)
+        3. Keep the same document structure and flow
+        4. Sound natural in {target_language}
+        
+        Original {source_language} text:
+        {content}
+        
+        {target_language} translation:
+        """
+        
+        response = await self.llm_model_func(prompt)
+        return response.strip()
+
+    async def _extract_matching_entities(
+        self, 
+        original_entities: list[dict],
+        translated_text: str,
+        source_language: str,
+        target_language: str,
+        translated_chunks: dict
+    ) -> list[dict]:
+        """
+        Extract entities from translated text that correspond to original entities.
+        This ensures a 1:1 mapping between source and target entities.
+        
+        Args:
+            original_entities: List of original entities
+            translated_text: Translated document text
+            source_language: Source language
+            target_language: Target language
+            translated_chunks: Dictionary of translated chunks
+            
+        Returns:
+            List of entity dictionaries in the target language
+        """
+        # Format original entities list for the prompt
+        formatted_entities = []
+        for i, entity in enumerate(original_entities):
+            formatted_entities.append(f"{i+1}. {entity['name']} (Type: {entity['type']}): {entity['description']}")
+        
+        original_entities_str = "\n".join(formatted_entities)
+        
+        # Create prompt for entity extraction
+        prompt = f"""
+        You are tasked with finding the exact equivalent entities in a {target_language} text 
+        that correspond to entities identified in the original {source_language} text.
+        
+        I have identified the following entities in the {source_language} text:
+        {original_entities_str}
+        
+        Now I need you to identify the EXACT corresponding entities in this {target_language} text:
+        {translated_text}
+        
+        IMPORTANT REQUIREMENTS:
+        1. You MUST identify EXACTLY {len(original_entities)} entities in the {target_language} text.
+        2. Each entity must correspond to one entity in the {source_language} list in the same order.
+        3. The entity types should remain the same.
+        4. If an entity name is a proper noun or name, it may be spelled the same in both languages.
+        5. IMPORTANT: You MUST provide the description in {target_language}, not in {source_language}. Even if you see the entity in the text with a description in {source_language}, you need to translate that description to {target_language}.
+        
+        Format your response EXACTLY as follows, with one entity per line:
+        1. Entity: [entity name] | Type: [entity type] | Description: [description in {target_language}]
+        2. Entity: [entity name] | Type: [entity type] | Description: [description in {target_language}]
+        ...and so on until you have EXACTLY {len(original_entities)} entities.
+        
+        Think carefully about each entity and ensure you've found its most accurate equivalent.
+        Make sure all descriptions are in {target_language}, not in {source_language}.
+        """
+        
+        response = await self.llm_model_func(prompt)
+        
+        # Parse the response to extract entity information
+        translated_entities = []
+        entity_lines = [line.strip() for line in response.strip().split('\n') if line.strip() and '|' in line]
+        
+        for line in entity_lines:
+            try:
+                # Remove any numbering at the start
+                line = re.sub(r'^\d+\.\s*', '', line)
+                
+                # Extract entity details
+                entity_parts = line.split('|')
+                if len(entity_parts) >= 3:
+                    entity_name = entity_parts[0].split('Entity:')[1].strip() if 'Entity:' in entity_parts[0] else entity_parts[0].strip()
+                    entity_type = entity_parts[1].split('Type:')[1].strip() if 'Type:' in entity_parts[1] else entity_parts[1].strip()
+                    entity_desc = entity_parts[2].split('Description:')[1].strip() if 'Description:' in entity_parts[2] else entity_parts[2].strip()
+                    
+                    translated_entities.append({
+                        "name": entity_name,
+                        "type": entity_type,
+                        "description": entity_desc
+                    })
+            except Exception as e:
+                logger.warning(f"Error parsing entity line: {line}. Error: {e}")
+        
+        # Only return the extracted entities, don't save to graph yet
+        return translated_entities
+
+    async def _extract_matching_relations(
+        self,
+        original_relations: list[dict],
+        translated_entities: list[dict],
+        translated_text: str,
+        source_language: str,
+        target_language: str,
+        translated_chunks: dict
+    ) -> list[dict]:
+        """
+        Extract relations from translated text that correspond to original relations.
+        
+        Args:
+            original_relations: List of original relations
+            translated_entities: List of translated entities
+            translated_text: Translated document text
+            source_language: Source language
+            target_language: Target language
+            translated_chunks: Dictionary of translated chunks
+            
+        Returns:
+            List of relation dictionaries in the target language
+        """
+        if not original_relations:
+            return []
+        
+        # Create entity name mapping for easy lookup
+        entity_name_map = {entity["name"].upper(): entity["name"] for entity in translated_entities}
+        
+        # Format original relations list for the prompt
+        formatted_relations = []
+        for i, relation in enumerate(original_relations):
+            formatted_relations.append(f"{i+1}. {relation['source']} → {relation['target']}: {relation['description']}")
+        
+        original_relations_str = "\n".join(formatted_relations)
+        
+        # Format translated entities for reference
+        formatted_entities = []
+        for i, entity in enumerate(translated_entities):
+            formatted_entities.append(f"{i+1}. {entity['name']} (Type: {entity['type']})")
+        
+        translated_entities_str = "\n".join(formatted_entities)
+        
+        # Create prompt for relation extraction
+        prompt = f"""
+        You are tasked with finding the exact equivalent relationships in a {target_language} text 
+        that correspond to relationships identified in the original {source_language} text.
+        
+        I have identified the following relationships in the {source_language} text:
+        {original_relations_str}
+        
+        I have already identified these entities in the {target_language} text:
+        {translated_entities_str}
+        
+        Now I need you to identify the EXACT corresponding relationships in this {target_language} text:
+        {translated_text}
+        
+        IMPORTANT REQUIREMENTS:
+        1. You MUST identify EXACTLY {len(original_relations)} relationships in the {target_language} text.
+        2. Each relationship must correspond to one relationship in the {source_language} list in the same order.
+        3. ONLY use entities from the list of {target_language} entities I provided.
+        4. The relationships should maintain the same directional meaning (A → B).
+        5. IMPORTANT: You MUST provide the description in {target_language}, not in {source_language}. Even if you see the relationship in the text with a description in {source_language}, you need to translate that description to {target_language}.
+        
+        Format your response EXACTLY as follows, with one relationship per line:
+        1. [source entity] → [target entity] | Description: [relationship description in {target_language}] | Keywords: [comma-separated keywords in {target_language}]
+        2. [source entity] → [target entity] | Description: [relationship description in {target_language}] | Keywords: [comma-separated keywords in {target_language}]
+        ...and so on until you have EXACTLY {len(original_relations)} relationships.
+        
+        Think carefully about each relationship and ensure you've found its most accurate equivalent.
+        Make sure all descriptions and keywords are in {target_language}, not in {source_language}.
+        """
+        
+        response = await self.llm_model_func(prompt)
+        
+        # Parse the response to extract relation information
+        translated_relations = []
+        relation_lines = [line.strip() for line in response.strip().split('\n') if line.strip() and '→' in line]
+        
+        for line in relation_lines:
+            try:
+                # Remove any numbering at the start
+                line = re.sub(r'^\d+\.\s*', '', line)
+                
+                # Split into relationship and metadata
+                rel_parts = line.split('|')
+                if len(rel_parts) >= 2:
+                    # Parse the relationship part (source → target)
+                    rel_entities = rel_parts[0].strip().split('→')
+                    if len(rel_entities) == 2:
+                        src_entity = rel_entities[0].strip()
+                        tgt_entity = rel_entities[1].strip()
+                        
+                        # Parse description and keywords
+                        rel_desc = ""
+                        rel_keywords = ""
+                        
+                        for part in rel_parts[1:]:
+                            if 'Description:' in part:
+                                rel_desc = part.split('Description:')[1].strip()
+                            elif 'Keywords:' in part:
+                                rel_keywords = part.split('Keywords:')[1].strip()
+                        
+                        translated_relations.append({
+                            "source": src_entity,
+                            "target": tgt_entity,
+                            "description": rel_desc,
+                            "keywords": rel_keywords
+                        })
+            except Exception as e:
+                logger.warning(f"Error parsing relationship line: {line}. Error: {e}")
+        
+        # Only return the extracted relations, don't save to graph yet
+        return translated_relations
+
+    async def _store_translation_pairs(
+        self, 
+        original_entities: list[dict], 
+        translated_entities: list[dict],
+        original_relations: list[dict], 
+        translated_relations: list[dict],
+        source_language: str, 
+        target_language: str, 
+        db_path: str
+    ) -> None:
+        """
+        Store entity and relation translation pairs in a JSON file for future use.
+        
+        Args:
+            original_entities: Entities from original text
+            translated_entities: Entities from translated text
+            original_relations: Relations from original text
+            translated_relations: Relations from translated text
+            source_language: Source language name
+            target_language: Target language name
+            db_path: Path to save the translation database
+        """
+        from lightrag.utils import load_json, write_json
+        
+        # Ensure we have equal numbers of entities and relations
+        if len(original_entities) != len(translated_entities):
+            # Take the minimum number to ensure pairs
+            min_count = min(len(original_entities), len(translated_entities))
+            original_entities = original_entities[:min_count]
+            translated_entities = translated_entities[:min_count]
+            
+        if len(original_relations) != len(translated_relations):
+            # Take the minimum number to ensure pairs
+            min_count = min(len(original_relations), len(translated_relations))
+            original_relations = original_relations[:min_count]
+            translated_relations = translated_relations[:min_count]
+        
+        # Create entity translation pairs
+        entity_translations = []
+        for i in range(len(original_entities)):
+            entity_translations.append({
+                "original": original_entities[i]["name"],
+                "translated": translated_entities[i]["name"],
+                "original_description": original_entities[i]["description"],
+                "translated_description": translated_entities[i]["description"],
+                "original_language": source_language,
+                "translated_language": target_language,
+                "type": original_entities[i]["type"],
+                "timestamp": datetime.now().isoformat()
+            })
+        
+        # Create relation translation pairs
+        relation_translations = []
+        for i in range(len(original_relations)):
+            relation_translations.append({
+                "original_src": original_relations[i]["source"],
+                "original_tgt": original_relations[i]["target"],
+                "original_desc": original_relations[i]["description"],
+                "translated_src": translated_relations[i]["source"],
+                "translated_tgt": translated_relations[i]["target"],
+                "translated_desc": translated_relations[i]["description"],
+                "original_language": source_language,
+                "translated_language": target_language,
+                "timestamp": datetime.now().isoformat()
+            })
+        
+        # Load existing translations if file exists
+        translations_db = {}
+        try:
+            if os.path.exists(db_path):
+                translations_db = load_json(db_path) or {}
+        except Exception as e:
+            logger.warning(f"Could not load existing translations: {e}")
+        
+        # Add new translations
+        if 'entities' not in translations_db:
+            translations_db['entities'] = []
+        if 'relations' not in translations_db:
+            translations_db['relations'] = []
+        
+        translations_db['entities'].extend(entity_translations)
+        translations_db['relations'].extend(relation_translations)
+        
+        # Remove duplicates
+        translations_db['entities'] = self._deduplicate_translations(translations_db['entities'])
+        translations_db['relations'] = self._deduplicate_translations(translations_db['relations'])
+        
+        # Save to file
+        write_json(translations_db, db_path)
+        logger.info(f"Saved {len(entity_translations)} entity and {len(relation_translations)} relation translations to {db_path}")
+
+    def _deduplicate_translations(self, translations_list: list[dict]) -> list[dict]:
+        """
+        Remove duplicate translations from a list of translation pairs.
+        
+        Args:
+            translations_list: List of translation dictionaries
+            
+        Returns:
+            Deduplicated list of translation dictionaries
+        """
+        seen = set()
+        unique_translations = []
+        
+        for trans in translations_list:
+            # Use relevant fields to create a unique key
+            if 'original' in trans and 'translated' in trans:
+                key = f"{trans['original']}|{trans['translated']}|{trans.get('original_language', '')}|{trans.get('translated_language', '')}"
+            elif 'original_src' in trans and 'original_tgt' in trans:
+                key = (f"{trans['original_src']}|{trans['original_tgt']}|"
+                    f"{trans['translated_src']}|{trans['translated_tgt']}|"
+                    f"{trans.get('original_language', '')}|{trans.get('translated_language', '')}")
+            else:
+                # If we can't determine a unique key, keep the entry
+                unique_translations.append(trans)
+                continue
+            
+            if key not in seen:
+                seen.add(key)
+                unique_translations.append(trans)
+        
+        return unique_translations
+    async def _fix_entity_count_mismatch(
+        self, 
+        original_entities: list[dict],
+        translated_entities: list[dict],
+        translated_text: str,
+        source_language: str,
+        target_language: str,
+        translated_chunks: dict
+    ) -> list[dict]:
+        """
+        Fix entity count mismatch by requesting additional entities or removing excess ones.
+        
+        Args:
+            original_entities: List of original entities
+            translated_entities: List of translated entities (potentially mismatched)
+            translated_text: Translated document text
+            source_language: Source language
+            target_language: Target language
+            translated_chunks: Dictionary of translated chunks
+            
+        Returns:
+            Updated list of translated entities with correct count
+        """
+        orig_count = len(original_entities)
+        trans_count = len(translated_entities)
+        
+        if orig_count == trans_count:
+            return translated_entities
+        
+        # Format original entities
+        orig_entities_str = "\n".join([
+            f"{i+1}. {entity['name']} (Type: {entity['type']}): {entity['description']}"
+            for i, entity in enumerate(original_entities)
+        ])
+        
+        # Format existing translated entities
+        trans_entities_str = "\n".join([
+            f"{i+1}. {entity['name']} (Type: {entity['type']}): {entity['description']}"
+            for i, entity in enumerate(translated_entities)
+        ])
+        
+        # Build the appropriate prompt based on the mismatch type
+        if trans_count < orig_count:
+            # We need more entities
+            prompt = f"""
+            I need your help fixing an entity count mismatch between {source_language} and {target_language} versions of a document.
+            
+            The {source_language} document has {orig_count} entities:
+            {orig_entities_str}
+            
+            But we only identified {trans_count} entities in the {target_language} document:
+            {trans_entities_str}
+            
+            Please identify {orig_count - trans_count} ADDITIONAL entities in the {target_language} text that would complete the list,
+            ensuring we have exactly one {target_language} entity for each {source_language} entity.
+            
+            {target_language} text:
+            {translated_text}
+            
+            Format your response EXACTLY as follows for ONLY the ADDITIONAL entities:
+            {trans_count+1}. Entity: [entity name] | Type: [entity type] | Description: [description]
+            {trans_count+2}. Entity: [entity name] | Type: [entity type] | Description: [description]
+            ...and so on until we have a total of {orig_count} entities.
+            """
+            
+            response = await self.llm_model_func(prompt)
+            
+            # Parse the additional entities
+            additional_entities = []
+            entity_lines = [line.strip() for line in response.strip().split('\n') if line.strip() and '|' in line]
+            
+            for line in entity_lines:
+                try:
+                    # Remove any numbering at the start
+                    line = re.sub(r'^\d+\.\s*', '', line)
+                    
+                    # Extract entity details
+                    entity_parts = line.split('|')
+                    if len(entity_parts) >= 3:
+                        entity_name = entity_parts[0].split('Entity:')[1].strip() if 'Entity:' in entity_parts[0] else entity_parts[0].strip()
+                        entity_type = entity_parts[1].split('Type:')[1].strip() if 'Type:' in entity_parts[1] else entity_parts[1].strip()
+                        entity_desc = entity_parts[2].split('Description:')[1].strip() if 'Description:' in entity_parts[2] else entity_parts[2].strip()
+                        
+                        additional_entities.append({
+                            "name": entity_name,
+                            "type": entity_type,
+                            "description": entity_desc
+                        })
+                except Exception as e:
+                    logger.warning(f"Error parsing entity line: {line}. Error: {e}")
+            
+            # Combine existing and additional entities
+            updated_entities = translated_entities + additional_entities
+            
+        else:
+            # We have too many entities - keep only the most important ones
+            prompt = f"""
+            I need your help fixing an entity count mismatch between {source_language} and {target_language} versions of a document.
+            
+            The {source_language} document has {orig_count} entities:
+            {orig_entities_str}
+            
+            But we identified {trans_count} entities in the {target_language} document:
+            {trans_entities_str}
+            
+            Please select EXACTLY {orig_count} entities from the {target_language} list that best match the entities in the {source_language} list.
+            
+            Format your response EXACTLY as follows for the SELECTED entities:
+            1. Entity: [entity name] | Type: [entity type] | Description: [description]
+            2. Entity: [entity name] | Type: [entity type] | Description: [description]
+            ...and so on until you have EXACTLY {orig_count} entities.
+            
+            Make sure that each selected entity corresponds with one of the original entities in order.
+            """
+            
+            response = await self.llm_model_func(prompt)
+            
+            # Parse the selected entities
+            updated_entities = []
+            entity_lines = [line.strip() for line in response.strip().split('\n') if line.strip() and '|' in line]
+            
+            for line in entity_lines:
+                try:
+                    # Remove any numbering at the start
+                    line = re.sub(r'^\d+\.\s*', '', line)
+                    
+                    # Extract entity details
+                    entity_parts = line.split('|')
+                    if len(entity_parts) >= 3:
+                        entity_name = entity_parts[0].split('Entity:')[1].strip() if 'Entity:' in entity_parts[0] else entity_parts[0].strip()
+                        entity_type = entity_parts[1].split('Type:')[1].strip() if 'Type:' in entity_parts[1] else entity_parts[1].strip()
+                        entity_desc = entity_parts[2].split('Description:')[1].strip() if 'Description:' in entity_parts[2] else entity_parts[2].strip()
+                        
+                        updated_entities.append({
+                            "name": entity_name,
+                            "type": entity_type,
+                            "description": entity_desc
+                        })
+                except Exception as e:
+                    logger.warning(f"Error parsing entity line: {line}. Error: {e}")
+        
+        # Verify the count is correct now
+        if len(updated_entities) != orig_count:
+            logger.warning(f"Entity count still mismatched after fixing: {len(updated_entities)} vs {orig_count}")
+            # Force the count to match by truncating or padding
+            if len(updated_entities) > orig_count:
+                updated_entities = updated_entities[:orig_count]
+            else:
+                # Duplicate the last entity if needed
+                while len(updated_entities) < orig_count:
+                    duplicate = dict(updated_entities[-1])
+                    duplicate["name"] = f"{duplicate['name']} (Copy)"
+                    updated_entities.append(duplicate)
+        
+        return updated_entities
+
+    async def _fix_relation_count_mismatch(
+        self,
+        original_relations: list[dict],
+        translated_relations: list[dict], 
+        translated_entities: list[dict],
+        data_translated: str,
+        source_language: str, 
+        target_language: str,
+        translated_chunks: dict
+    ) -> list[dict]:
+        """
+        Fix relation count mismatch by requesting additional relations or removing excess ones.
+        
+        Args:
+            original_relations: List of original relations
+            translated_relations: List of translated relations (potentially mismatched)
+            translated_entities: List of translated entities
+            data_translated: Translated document text
+            source_language: Source language
+            target_language: Target language
+            translated_chunks: Dictionary of translated chunks
+            
+        Returns:
+            Updated list of translated relations with correct count
+        """
+        orig_count = len(original_relations)
+        trans_count = len(translated_relations)
+        
+        if orig_count == trans_count:
+            return translated_relations
+        
+        # Format original relations
+        orig_relations_str = "\n".join([
+            f"{i+1}. {rel['source']} → {rel['target']}: {rel['description']}"
+            for i, rel in enumerate(original_relations)
+        ])
+        
+        # Format existing translated relations
+        trans_relations_str = "\n".join([
+            f"{i+1}. {rel['source']} → {rel['target']}: {rel['description']}"
+            for i, rel in enumerate(translated_relations)
+        ])
+        
+        # Format translated entities for reference
+        trans_entities_str = "\n".join([
+            f"{i+1}. {entity['name']} (Type: {entity['type']})"
+            for i, entity in enumerate(translated_entities)
+        ])
+        
+        # Build the appropriate prompt based on the mismatch type
+        if trans_count < orig_count:
+            # We need more relations
+            prompt = f"""
+            I need your help fixing a relationship count mismatch between {source_language} and {target_language} versions of a document.
+            
+            The {source_language} document has {orig_count} relationships:
+            {orig_relations_str}
+            
+            But we only identified {trans_count} relationships in the {target_language} document:
+            {trans_relations_str}
+            
+            Here are the entities available in the {target_language} document:
+            {trans_entities_str}
+            
+            Please identify {orig_count - trans_count} ADDITIONAL relationships in the {target_language} text that would complete the list,
+            ensuring we have exactly one {target_language} relationship for each {source_language} relationship.
+            
+            {target_language} text:
+            {data_translated}
+            
+            Format your response EXACTLY as follows for ONLY the ADDITIONAL relationships:
+            {trans_count+1}. [source entity] → [target entity] | Description: [relationship description] | Keywords: [comma-separated keywords]
+            {trans_count+2}. [source entity] → [target entity] | Description: [relationship description] | Keywords: [comma-separated keywords]
+            ...and so on until we have a total of {orig_count} relationships.
+            
+            ONLY use entity names from the list I provided above.
+            """
+            
+            response = await self.llm_model_func(prompt)
+            
+            # Parse the additional relations
+            additional_relations = []
+            relation_lines = [line.strip() for line in response.strip().split('\n') if line.strip() and '→' in line]
+            
+            for line in relation_lines:
+                try:
+                    # Remove any numbering at the start
+                    line = re.sub(r'^\d+\.\s*', '', line)
+                    
+                    # Split into relationship and metadata
+                    rel_parts = line.split('|')
+                    if len(rel_parts) >= 2:
+                        # Parse the relationship part (source → target)
+                        rel_entities = rel_parts[0].strip().split('→')
+                        if len(rel_entities) == 2:
+                            src_entity = rel_entities[0].strip()
+                            tgt_entity = rel_entities[1].strip()
+                            
+                            # Parse description and keywords
+                            rel_desc = ""
+                            rel_keywords = ""
+                            
+                            for part in rel_parts[1:]:
+                                if 'Description:' in part:
+                                    rel_desc = part.split('Description:')[1].strip()
+                                elif 'Keywords:' in part:
+                                    rel_keywords = part.split('Keywords:')[1].strip()
+                            
+                            additional_relations.append({
+                                "source": src_entity,
+                                "target": tgt_entity,
+                                "description": rel_desc,
+                                "keywords": rel_keywords
+                            })
+                except Exception as e:
+                    logger.warning(f"Error parsing relationship line: {line}. Error: {e}")
+            
+            # Combine existing and additional relations
+            updated_relations = translated_relations + additional_relations
+            
+        else:
+            # We have too many relations - keep only the most important ones
+            prompt = f"""
+            I need your help fixing a relationship count mismatch between {source_language} and {target_language} versions of a document.
+            
+            The {source_language} document has {orig_count} relationships:
+            {orig_relations_str}
+            
+            But we identified {trans_count} relationships in the {target_language} document:
+            {trans_relations_str}
+            
+            Please select EXACTLY {orig_count} relationships from the {target_language} list that best match the relationships in the {source_language} list.
+            
+            Format your response EXACTLY as follows for the SELECTED relationships:
+            1. [source entity] → [target entity] | Description: [relationship description] | Keywords: [comma-separated keywords]
+            2. [source entity] → [target entity] | Description: [relationship description] | Keywords: [comma-separated keywords]
+            ...and so on until you have EXACTLY {orig_count} relationships.
+            
+            Make sure that each selected relationship corresponds with one of the original relationships in order.
+            """
+            
+            response = await self.llm_model_func(prompt)
+            
+            # Parse the selected relations
+            updated_relations = []
+            relation_lines = [line.strip() for line in response.strip().split('\n') if line.strip() and '→' in line]
+            
+            for line in relation_lines:
+                try:
+                    # Remove any numbering at the start
+                    line = re.sub(r'^\d+\.\s*', '', line)
+                    
+                    # Split into relationship and metadata
+                    rel_parts = line.split('|')
+                    if len(rel_parts) >= 2:
+                        # Parse the relationship part (source → target)
+                        rel_entities = rel_parts[0].strip().split('→')
+                        if len(rel_entities) == 2:
+                            src_entity = rel_entities[0].strip()
+                            tgt_entity = rel_entities[1].strip()
+                            
+                            # Parse description and keywords
+                            rel_desc = ""
+                            rel_keywords = ""
+                            
+                            for part in rel_parts[1:]:
+                                if 'Description:' in part:
+                                    rel_desc = part.split('Description:')[1].strip()
+                                elif 'Keywords:' in part:
+                                    rel_keywords = part.split('Keywords:')[1].strip()
+                            
+                            updated_relations.append({
+                                "source": src_entity,
+                                "target": tgt_entity,
+                                "description": rel_desc,
+                                "keywords": rel_keywords
+                            })
+                except Exception as e:
+                    logger.warning(f"Error parsing relationship line: {line}. Error: {e}")
+        
+        # Verify the count is correct now
+        if len(updated_relations) != orig_count:
+            logger.warning(f"Relation count still mismatched after fixing: {len(updated_relations)} vs {orig_count}")
+            # Force the count to match by truncating or padding
+            if len(updated_relations) > orig_count:
+                updated_relations = updated_relations[:orig_count]
+            else:
+                # Duplicate the last relation if needed
+                while len(updated_relations) < orig_count:
+                    duplicate = dict(updated_relations[-1])
+                    duplicate["description"] = f"{duplicate['description']} (Copy)"
+                    updated_relations.append(duplicate)
+        
+        return updated_relations
+
+    async def _create_cross_lingual_edges(
+        self, 
+        original_entities: list[dict], 
+        translated_entities: list[dict],
+        source_language: str, 
+        target_language: str
+    ) -> None:
+        """
+        Create edges in the knowledge graph to connect original entities with their translations.
+        
+        Args:
+            original_entities: List of entities from original text
+            translated_entities: List of entities from translated text
+            source_language: Source language name
+            target_language: Target language name
+        """
+        # Ensure we have equal numbers of entities
+        if len(original_entities) != len(translated_entities):
+            logger.warning(f"Entity count mismatch: {len(original_entities)} {source_language} vs {len(translated_entities)} {target_language}")
+            # Take the minimum number to ensure pairs
+            min_count = min(len(original_entities), len(translated_entities))
+            original_entities = original_entities[:min_count]
+            translated_entities = translated_entities[:min_count]
+        
+        # Create cross-lingual edges - one edge for each entity pair
+        for i in range(len(original_entities)):
+            orig_entity = original_entities[i]
+            trans_entity = translated_entities[i]
+            
+            orig_name = f'"{orig_entity["name"].upper()}"'
+            trans_name = f'"{trans_entity["name"].upper()}"'
+            
+            # Create the cross-lingual edge
+            edge_data = {
+                "weight": 1.0,
+                "description": f"Translation equivalent ({source_language} ↔ {target_language})",
+                "keywords": f"translation,cross-lingual,{source_language.lower()},{target_language.lower()}",
+                "relation_type": "translation_equivalent",
+                "languages": f"{source_language},{target_language}",
+                "source_id": "cross_lingual",
+                "original_language": source_language,
+                "translated_language": target_language,
+                "created_at": datetime.now().isoformat(),
+                "confidence_score": 1.0,
+            }
+            
+            # Add to knowledge graph
+            await self.chunk_entity_relation_graph.upsert_edge(orig_name, trans_name, edge_data)
+            
+            logger.debug(f"Created cross-lingual edge between {orig_name} ({source_language}) and {trans_name} ({target_language})")
+            
+        logger.info(f"Created {len(original_entities)} cross-lingual edges between {source_language} and {target_language} entities")

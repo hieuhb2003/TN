@@ -54,7 +54,7 @@ class NanoVectorDBStorage(BaseVectorStorage):
         if not len(data):
             logger.warning("You insert an empty data to vector DB")
             return []
-
+        # print("dm m có gọi t ra mà")
         current_time = time.time()
         list_data = [
             {
@@ -74,11 +74,20 @@ class NanoVectorDBStorage(BaseVectorStorage):
         embeddings_list = await asyncio.gather(*embedding_tasks)
 
         embeddings = np.concatenate(embeddings_list)
+        
+        # print(len(embeddings), len(list_data))
         if len(embeddings) == len(list_data):
             for i, d in enumerate(list_data):
                 d["__vector__"] = embeddings[i]
+                # print(d["__vector__"])
+                # print(embeddings[i])
+                # print(d)
             results = self._client.upsert(datas=list_data)
-            return results
+            async with self._save_lock:
+                self._client.save()
+            logger.info(f"Successfully saved {len(list_data)} vectors to {self.namespace}")
+            return results        
+            # return results
         else:
             # sometimes the embedding is not returned correctly. just log it.
             logger.error(
@@ -160,3 +169,194 @@ class NanoVectorDBStorage(BaseVectorStorage):
     async def index_done_callback(self) -> None:
         async with self._save_lock:
             self._client.save()
+
+    async def get_entity_embedding(self, entity_name: str) -> np.ndarray | None:
+        """Get embedding vector for an entity by name
+        
+        Args:
+            entity_name (str): Tên entity cần lấy embedding
+            
+        Returns:
+            np.ndarray | None: Vector embedding hoặc None nếu không tìm thấy
+        """
+        # Chuẩn hóa entity name
+        entity_name = f'"{entity_name.upper()}"' if not entity_name.startswith('"') else entity_name.upper()
+        entity_id = compute_mdhash_id(entity_name, prefix="ent-")
+        
+        try:
+            # Lấy data object từ nano-vectordb
+            data = self._client.get([entity_id])
+            
+            if data and len(data) > 0:
+                # Tìm chỉ mục của entity trong storage data
+                index = None
+                for i, item in enumerate(self._client._NanoVectorDB__storage["data"]):
+                    if item["__id__"] == entity_id:
+                        index = i
+                        break
+                
+                if index is not None:
+                    # Lấy vector từ matrix theo index
+                    vector = self._client._NanoVectorDB__storage["matrix"][index]
+                    logger.debug(f"Found embedding for entity: {entity_name}")
+                    return vector
+                else:
+                    logger.warning(f"Entity found but no embedding vector: {entity_name}")
+            else:
+                logger.warning(f"Entity not found: {entity_name}")
+        except Exception as e:
+            logger.error(f"Error getting embedding for entity {entity_name}: {e}")
+        
+        return None
+
+    async def get_entity_embedding_by_id(self, entity_id: str) -> np.ndarray | None:
+        """Get embedding vector for an entity by name
+        
+        Args:
+            entity_name (str): Tên entity cần lấy embedding
+            
+        Returns:
+            np.ndarray | None: Vector embedding hoặc None nếu không tìm thấy
+        """        
+        try:
+            # Lấy data object từ nano-vectordb
+            data = self._client.get([entity_id])
+            
+            if data and len(data) > 0:
+                # Tìm chỉ mục của entity trong storage data
+                index = None
+                for i, item in enumerate(self._client._NanoVectorDB__storage["data"]):
+                    if item["__id__"] == entity_id:
+                        index = i
+                        break
+                
+                if index is not None:
+                    # Lấy vector từ matrix theo index
+                    vector = self._client._NanoVectorDB__storage["matrix"][index]
+                    logger.debug(f"Found embedding for entity: {entity_id}")
+                    return vector
+                else:
+                    logger.warning(f"Entity found but no embedding vector: {entity_id}")
+            else:
+                logger.warning(f"Entity not found: {entity_id}")
+        except Exception as e:
+            logger.error(f"Error getting embedding for entity {entity_id}: {e}")
+        
+        return None
+
+    async def get_relation_embedding(self, src_id: str, tgt_id: str) -> np.ndarray | None:
+        """Get embedding vector for a relation between two entities
+        
+        Args:
+            src_id (str): Tên entity nguồn
+            tgt_id (str): Tên entity đích
+            
+        Returns:
+            np.ndarray | None: Vector embedding hoặc None nếu không tìm thấy
+        """
+        # Chuẩn hóa entity names
+        src_id = f'"{src_id.upper()}"' if not src_id.startswith('"') else src_id.upper()
+        tgt_id = f'"{tgt_id.upper()}"' if not tgt_id.startswith('"') else tgt_id.upper()
+        
+        # Tạo relation ID
+        relation_id = compute_mdhash_id(src_id + tgt_id, prefix="rel-")
+        
+        try:
+            # Tìm kiếm relation theo ID
+            index = None
+            for i, item in enumerate(self._client._NanoVectorDB__storage["data"]):
+                if item["__id__"] == relation_id:
+                    index = i
+                    break
+            
+            if index is not None:
+                # Lấy vector từ matrix theo index
+                vector = self._client._NanoVectorDB__storage["matrix"][index]
+                return vector
+            else:
+                # Thử tìm theo chiều ngược lại
+                reverse_relation_id = compute_mdhash_id(tgt_id + src_id, prefix="rel-")
+                
+                for i, item in enumerate(self._client._NanoVectorDB__storage["data"]):
+                    if item["__id__"] == reverse_relation_id:
+                        vector = self._client._NanoVectorDB__storage["matrix"][i]
+                        return vector
+                        
+                logger.warning(f"Relation between {src_id} and {tgt_id} not found")
+        except Exception as e:
+            logger.error(f"Error getting embedding for relation between {src_id} and {tgt_id}: {e}")
+        
+        return None
+
+    async def get_chunk_embedding(self, chunk_id: str) -> np.ndarray | None:
+        """Get embedding vector for a text chunk
+        
+        Args:
+            chunk_id (str): ID của chunk cần lấy embedding
+            
+        Returns:
+            np.ndarray | None: Vector embedding hoặc None nếu không tìm thấy
+        """
+        try:
+            # Lấy data object từ nano-vectordb
+            data = self._client.get([chunk_id])
+            
+            if data and len(data) > 0:
+                # Tìm chỉ mục của chunk trong storage data
+                index = None
+                for i, item in enumerate(self._client._NanoVectorDB__storage["data"]):
+                    if item["__id__"] == chunk_id:
+                        index = i
+                        break
+                
+                if index is not None:
+                    # Lấy vector từ matrix theo index
+                    vector = self._client._NanoVectorDB__storage["matrix"][index]
+                    logger.debug(f"Found embedding for chunk: {chunk_id}")
+                    return vector
+                else:
+                    logger.warning(f"Chunk found but no embedding vector: {chunk_id}")
+            else:
+                logger.warning(f"Chunk not found: {chunk_id}")
+        except Exception as e:
+            logger.error(f"Error getting embedding for chunk {chunk_id}: {e}")
+        
+        return None
+
+    async def batch_get_embeddings(self, ids: list[str]) -> dict[str, np.ndarray]:
+        """Get embeddings for multiple items by their IDs
+        
+        Args:
+            ids (list[str]): Danh sách các ID cần lấy embedding
+            
+        Returns:
+            dict[str, np.ndarray]: Dictionary {id: embedding_vector}
+        """
+        results = {}
+        
+        try:
+            data_objects = self._client.get(ids)
+            id_to_index = {}
+            
+            # Tạo mapping từ ID đến index trong matrix
+            for i, item in enumerate(self._client._NanoVectorDB__storage["data"]):
+                if item["__id__"] in ids:
+                    id_to_index[item["__id__"]] = i
+            
+            # Lấy embedding từ matrix
+            for id_value in ids:
+                if id_value in id_to_index:
+                    index = id_to_index[id_value]
+                    results[id_value] = self._client._NanoVectorDB__storage["matrix"][index]
+                else:
+                    logger.warning(f"No embedding found for ID: {id_value}")
+        except Exception as e:
+            logger.error(f"Error in batch getting embeddings: {e}")
+        
+        return results
+
+    async def force_save(self) -> None:
+        """Force save the vector database to disk"""
+        async with self._save_lock:
+            self._client.save()
+            logger.info(f"Vector storage {self.namespace} saved to {self._client_file_name}")

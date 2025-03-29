@@ -590,7 +590,6 @@ async def extract_entities(
 
     return knowledge_graph_inst
 
-
 async def kg_query(
     query: str,
     knowledge_graph_inst: BaseGraphStorage,

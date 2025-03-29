@@ -1,0 +1,1 @@
+python make_graph_with_vllm.py --data_path "C:\\Users\\mhieu\\Desktop\\TN\\LIGHTRAG\\data\\sample_duo_data.json" --working_dir "./test_duo_3"

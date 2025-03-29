@@ -3,25 +3,86 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 import numpy as np
-from sklearn.metrics import average_precision_score, ndcg_score
-import sys
-import os
-# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 # Thiết lập logging
 logging.basicConfig(format='%(asctime)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S',
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class DirectRetrievalEvaluator:
+
+def calculate_recall(retrieved_docs, relevant_docs, k=None):
     """
-    Lớp đánh giá hiệu suất của các bộ query-document đã được retrieval sẵn,
-    tính điểm trực tiếp từ thứ tự các tài liệu mà không cần embedding lại.
+    Tính Recall dựa trên danh sách tài liệu được truy vấn và tài liệu liên quan.
+    
+    Args:
+        retrieved_docs: Danh sách các tài liệu được truy vấn (theo thứ tự)
+        relevant_docs: Danh sách các tài liệu liên quan (ground truth)
+        k: Giới hạn số lượng tài liệu xem xét (default: None - xem xét tất cả)
+    
+    Returns:
+        Điểm Recall
+    """
+    if k is not None:
+        retrieved_docs = retrieved_docs[:k]
+    
+    # Nếu không có tài liệu liên quan, trả về 0 để tránh chia cho 0
+    if not relevant_docs:
+        return 0.0
+    
+    # Tạo set để tìm kiếm nhanh hơn
+    relevant_set = set(relevant_docs)
+    retrieved_set = set(retrieved_docs)
+    
+    # Đếm số lượng tài liệu liên quan được tìm thấy trong kết quả truy vấn
+    hits = len(relevant_set.intersection(retrieved_set))
+    
+    # Tính recall: số lượng tài liệu liên quan được tìm thấy / tổng số tài liệu liên quan
+    recall = hits / len(relevant_set)
+    return recall
+
+
+def calculate_mrr(retrieved_docs, relevant_docs, k=None):
+    """
+    Tính Mean Reciprocal Rank (MRR) dựa trên danh sách tài liệu được truy vấn và tài liệu liên quan.
+    
+    Args:
+        retrieved_docs: Danh sách các tài liệu được truy vấn (theo thứ tự)
+        relevant_docs: Danh sách các tài liệu liên quan (ground truth)
+        k: Giới hạn số lượng tài liệu xem xét (default: None - xem xét tất cả)
+    
+    Returns:
+        Điểm MRR
+    """
+    if k is not None:
+        retrieved_docs = retrieved_docs[:k]
+    
+    # Nếu không có tài liệu liên quan hoặc không có tài liệu truy vấn, trả về 0
+    if not retrieved_docs or not relevant_docs:
+        return 0.0
+    
+    # Tạo set tài liệu liên quan để tìm kiếm nhanh hơn
+    relevant_set = set(relevant_docs)
+    
+    # Tìm vị trí đầu tiên của bất kỳ tài liệu liên quan nào trong danh sách truy vấn
+    for i, doc in enumerate(retrieved_docs):
+        if doc in relevant_set:
+            # MRR = 1 / (vị trí đầu tiên của relevant item)
+            return 1.0 / (i + 1)
+    
+    # Nếu không tìm thấy tài liệu liên quan nào trong danh sách truy vấn
+    return 0.0
+
+
+
+class RecallMRREvaluator:
+    """
+    Lớp đánh giá hiệu suất của các bộ query-document chỉ tính Recall và MRR@10
     """
     
     def __init__(self, show_progress_bar: bool = True):
         """
-        Khởi tạo DirectRetrievalEvaluator.
+        Khởi tạo RecallMRREvaluator.
         
         Args:
             show_progress_bar: Hiển thị thanh tiến trình khi tính toán
@@ -36,7 +97,7 @@ class DirectRetrievalEvaluator:
         at_k: int = 10
     ) -> Dict[str, float]:
         """
-        Tính toán các chỉ số đánh giá trực tiếp từ thứ tự các tài liệu đã được retrieval.
+        Tính toán Recall và MRR từ thứ tự các tài liệu đã được retrieval.
         
         Args:
             queries: Danh sách các câu truy vấn
@@ -47,63 +108,53 @@ class DirectRetrievalEvaluator:
         Returns:
             Dictionary chứa các chỉ số đánh giá
         """
-        all_ap_scores = []  # Average Precision
-        all_mrr_scores = []  # Mean Reciprocal Rank
-        all_ndcg_scores = []  # Normalized Discounted Cumulative Gain
+        all_recall_scores = []
+        all_mrr_scores = []
+        
+        processed_queries = 0
+        skipped_queries = 0
         
         for query in queries:
+            # Kiểm tra xem query có tồn tại trong retrieved_docs và ground_truth không
+            if query not in retrieved_docs or query not in ground_truth:
+                skipped_queries += 1
+                logger.warning(f"Query không có trong retrieved_docs hoặc ground_truth: {query[:50]}...")
+                continue
+            
             # Lấy các document được retrieval cho query này
-            docs = retrieved_docs.get(query, [])
+            docs = retrieved_docs[query]
             
             # Lấy các document ground truth cho query này
-            positive_docs = ground_truth.get(query, [])
+            positive_docs = ground_truth[query]
             
             # Nếu không có document nào được retrieval hoặc không có ground truth, bỏ qua query này
             if not docs or not positive_docs:
-                logger.warning(f"Bỏ qua query không có document hoặc ground truth: {query}")
+                skipped_queries += 1
+                logger.warning(f"Bỏ qua query không có document hoặc ground truth: {query[:50]}...")
                 continue
             
-            # Giới hạn số lượng document xem xét
-            docs = docs[:at_k]
+            # Giới hạn số lượng document xem xét cho đánh giá
+            docs_for_eval = docs[:at_k] if at_k is not None else docs
             
-            # Tạo nhãn relevance (1 nếu document nằm trong ground truth, 0 nếu không)
-            relevance = [1 if doc in positive_docs else 0 for doc in docs]
+            # Tính Recall
+            recall = calculate_recall(docs_for_eval, positive_docs)
+            all_recall_scores.append(recall)
             
             # Tính MRR (Mean Reciprocal Rank)
-            mrr = 0
-            for i, rel in enumerate(relevance):
-                if rel == 1:
-                    mrr = 1.0 / (i + 1)
-                    break
+            mrr = calculate_mrr(docs_for_eval, positive_docs)
             all_mrr_scores.append(mrr)
             
-            # Tính NDCG (Normalized Discounted Cumulative Gain)
-            # Tạo scores giả định (1.0 cho tất cả các document để giữ nguyên thứ tự)
-            scores = [1.0] * len(docs)
-            
-            # Tính NDCG
-            ndcg = ndcg_score([relevance], [scores], k=at_k)
-            all_ndcg_scores.append(ndcg)
-            
-            # Tính AP (Average Precision)
-            # Cần tạo scores cho tất cả các document (cả positive và negative)
-            # Giả định scores giảm dần theo thứ tự
-            all_docs = docs + [doc for doc in positive_docs if doc not in docs]
-            all_relevance = [1 if doc in positive_docs else 0 for doc in all_docs]
-            all_scores = [1.0 / (i + 1) for i in range(len(all_docs))]  # Scores giảm dần
-            
-            ap = average_precision_score(all_relevance, all_scores)
-            all_ap_scores.append(ap)
+            processed_queries += 1
+        
+        logger.info(f"Đã xử lý {processed_queries} queries, bỏ qua {skipped_queries} queries")
         
         # Tính trung bình
-        mean_ap = np.mean(all_ap_scores) if all_ap_scores else 0
+        mean_recall = np.mean(all_recall_scores) if all_recall_scores else 0
         mean_mrr = np.mean(all_mrr_scores) if all_mrr_scores else 0
-        mean_ndcg = np.mean(all_ndcg_scores) if all_ndcg_scores else 0
         
         metrics = {
-            "map": mean_ap,
+            f"recall@{at_k}": mean_recall,
             f"mrr@{at_k}": mean_mrr,
-            f"ndcg@{at_k}": mean_ndcg
         }
         
         return metrics
@@ -137,22 +188,26 @@ class DirectRetrievalEvaluator:
         
         # Tính toán các chỉ số đánh giá
         logger.info(f"Đánh giá {name} với {len(queries)} queries, at_k={at_k}")
-        metrics = self.calculate_metrics(queries, retrieved_docs, ground_truth, at_k)
-        
-        # In kết quả
-        logger.info(f"Kết quả đánh giá {name}:")
-        for metric_name, metric_value in metrics.items():
-            logger.info(f"  {metric_name}: {metric_value:.4f}")
-        
-        # Lưu kết quả vào file CSV nếu cần
-        if output_path:
-            csv_path = os.path.join(output_path, f"{name}_results_@{at_k}.csv")
-            with open(csv_path, "w", encoding="utf-8") as f:
-                f.write("metric,value\n")
-                for metric_name, metric_value in metrics.items():
-                    f.write(f"{metric_name},{metric_value:.6f}\n")
-        
-        return metrics
+        try:
+            metrics = self.calculate_metrics(queries, retrieved_docs, ground_truth, at_k)
+            
+            # In kết quả
+            logger.info(f"Kết quả đánh giá {name}:")
+            for metric_name, metric_value in metrics.items():
+                logger.info(f"  {metric_name}: {metric_value:.4f}")
+            
+            # Lưu kết quả vào file CSV nếu cần
+            if output_path:
+                csv_path = os.path.join(output_path, f"{name}_results_@{at_k}.csv")
+                with open(csv_path, "w", encoding="utf-8") as f:
+                    f.write("metric,value\n")
+                    for metric_name, metric_value in metrics.items():
+                        f.write(f"{metric_name},{metric_value:.6f}\n")
+            
+            return metrics
+        except Exception as e:
+            logger.error(f"Lỗi khi đánh giá mô hình {name}: {str(e)}")
+            return {"error": str(e)}
     
     def evaluate_multiple_models(
         self,
@@ -182,25 +237,40 @@ class DirectRetrievalEvaluator:
         
         results = {}
         
+        # Kiểm tra cấu trúc model_results
+        if not isinstance(model_results, dict):
+            raise ValueError("model_results phải là một dictionary")
+            
         for model_name, retrieved_docs in model_results.items():
             logger.info(f"\nĐánh giá mô hình: {model_name}")
             
+            # Kiểm tra cấu trúc retrieved_docs
+            if not isinstance(retrieved_docs, dict):
+                logger.error(f"Dữ liệu của mô hình {model_name} không đúng định dạng. Cần là dictionary.")
+                continue
+                
             # Đánh giá
-            metrics = self.evaluate_model(
-                queries=queries,
-                retrieved_docs=retrieved_docs,
-                ground_truth=ground_truth,
-                at_k=at_k,
-                name=model_name,
-                output_path=output_path
-            )
-            
-            results[model_name] = metrics
+            try:
+                metrics = self.evaluate_model(
+                    queries=queries,
+                    retrieved_docs=retrieved_docs,
+                    ground_truth=ground_truth,
+                    at_k=at_k,
+                    name=model_name,
+                    output_path=output_path
+                )
+                
+                results[model_name] = metrics
+            except Exception as e:
+                logger.error(f"Lỗi khi đánh giá mô hình {model_name}: {str(e)}")
+                results[model_name] = {"error": str(e)}
         
-        # Lưu kết quả tổng hợp
         if output_path:
-            with open(os.path.join(output_path, "evaluation_summary.json"), "w", encoding="utf-8") as f:
-                json.dump(results, f, indent=2, ensure_ascii=False)
+            try:
+                with open(os.path.join(output_path, "evaluation_summary.json"), "w", encoding="utf-8") as f:
+                    json.dump(results, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                logger.error(f"Lỗi khi lưu kết quả đánh giá: {str(e)}")
         
         return results
     
@@ -212,12 +282,16 @@ class DirectRetrievalEvaluator:
             file_path: Đường dẫn đến file JSON
             
         Returns:
-            Dữ liệu được tải từ file JSON
+            Dictionary chứa dữ liệu từ file JSON
         """
         logger.info(f"Tải dữ liệu từ: {file_path}")
-        with open(file_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data
+        except Exception as e:
+            logger.error(f"Lỗi khi tải dữ liệu từ {file_path}: {str(e)}")
+            raise
     
     def save_data_to_json(self, data: Dict[str, Any], file_path: str) -> None:
         """
@@ -228,113 +302,145 @@ class DirectRetrievalEvaluator:
             file_path: Đường dẫn đến file JSON
         """
         logger.info(f"Lưu dữ liệu vào: {file_path}")
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Lỗi khi lưu dữ liệu vào {file_path}: {str(e)}")
+            raise
+
+    def evaluate_from_result_file(
+        self,
+        result_file: str,
+        ground_truth_file: str,
+        at_k: int = 10,
+        output_path: Optional[str] = None
+    ) -> Dict[str, Dict[str, float]]:
+        """
+        Đánh giá từ file kết quả và ground truth.
+        
+        Args:
+            result_file: Đường dẫn đến file kết quả theo định dạng 
+                         {model_name -> {query -> [documents]}}
+            ground_truth_file: Đường dẫn đến file ground truth theo định dạng
+                               {query -> [relevant documents]}
+            at_k: Chỉ xem xét k document đầu tiên cho đánh giá
+            output_path: Đường dẫn để lưu kết quả đánh giá
+            
+        Returns:
+            Dictionary ánh xạ từ tên mô hình đến các chỉ số đánh giá của mô hình đó
+        """
+        # Tải dữ liệu
+        model_results = self.load_data_from_json(result_file)
+        ground_truth = self.load_data_from_json(ground_truth_file)
+        
+        # Lấy danh sách các câu truy vấn từ ground truth
+        queries = list(ground_truth.keys())
+        
+        # Đánh giá
+        return self.evaluate_multiple_models(
+            queries=queries,
+            model_results=model_results,
+            ground_truth=ground_truth,
+            at_k=at_k,
+            output_path=output_path
+        )
+
+
+# Hàm để xử lý file kết quả cho việc đánh giá
+def process_result_file_for_evaluation(
+    result_file: str,
+    output_file: str = None
+) -> Dict[str, Dict[str, List[str]]]:
+    """
+    Chuyển đổi cấu trúc dữ liệu từ result.json sang dạng phù hợp cho việc đánh giá
+    
+    Args:
+        result_file: Đường dẫn đến file kết quả
+        output_file: Đường dẫn để lưu cấu trúc mới (nếu cần)
+        
+    Returns:
+        Dữ liệu đã được chuyển đổi
+    """
+    try:
+        with open(result_file, 'r', encoding='utf-8') as f:
+            results = json.load(f)
+        
+        # Cấu trúc kết quả: {model: {query: [documents]}}
+        processed_results = {}
+        
+        for model_name, model_data in results.items():
+            if not isinstance(model_data, dict):
+                logger.warning(f"Dữ liệu của mô hình {model_name} không đúng định dạng. Bỏ qua.")
+                continue
+                
+            model_results = {}
+            for query, docs in model_data.items():
+                if isinstance(docs, list):
+                    model_results[query] = docs
+                else:
+                    logger.warning(f"Kết quả của query '{query[:30]}...' trong mô hình {model_name} không phải list. Bỏ qua.")
+            
+            processed_results[model_name] = model_results
+        
+        # Lưu kết quả đã xử lý nếu cần
+        if output_file:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(processed_results, f, indent=2, ensure_ascii=False)
+        
+        return processed_results
+    
+    except Exception as e:
+        logger.error(f"Lỗi khi xử lý file kết quả: {str(e)}")
+        raise
 
 
 # Ví dụ sử dụng
 if __name__ == "__main__":
-    # Khởi tạo evaluator
-    evaluator = DirectRetrievalEvaluator()
+    try:
+        evaluator = RecallMRREvaluator()
+        
+        # Đường dẫn đến các file
+        result_file = "/home/hungpv/projects/TN/LIGHTRAG/result_26_3/retrieval_results_true_method.json"
+        # output_processed_file = "processed_result.json"
+        ground_truth_file = "/home/hungpv/projects/TN/LIGHTRAG/data/small_grouth_truth.json"
+        
+        # Tiền xử lý dữ liệu nếu cần
+        # processed_results = process_result_file_for_evaluation(
+        #     result_file=result_file,
+        #     output_file=output_processed_file
+        # )
+        with open(result_file, 'r', encoding='utf-8') as f:
+            processed_results = json.load(f)        
+        # Tải ground truth 
+        try:
+            with open(ground_truth_file, 'r', encoding='utf-8') as f:
+                ground_truth = json.load(f)
+        except FileNotFoundError:
+            logger.warning(f"File ground truth {ground_truth_file} không tồn tại. Tạo một ground truth tạm thời cho demo.")
+            # Tạo ground truth tạm thời nếu cần
+            # ...
+        
+        # Lấy danh sách các câu truy vấn từ ground truth
+        queries = list(ground_truth.keys())
+        
+        # Đánh giá các mô hình
+        results = evaluator.evaluate_multiple_models(
+            queries=queries,
+            model_results=processed_results,
+            ground_truth=ground_truth,
+            at_k=10,
+            output_path="./evaluation_results_mrr_recall_new_true_method"
+        )
+        
+        # In kết quả tổng hợp
+        print("\nKết quả tổng hợp:")
+        for model_name, metrics in results.items():
+            print(f"\nMô hình: {model_name}")
+            for metric_name, metric_value in metrics.items():
+                print(f"  {metric_name}: {metric_value:.4f}")
     
-    # # Ví dụ dữ liệu
-    # queries = [
-    #     "What is LightRAG?",
-    #     "How does BGE-M3 work?",
-    #     "What are the benefits of knowledge graphs?"
-    # ]
-    with open("/Users/oraichain/Desktop/rag/TN/LIGHTRAG/example_benchmark/queries.json", "r", encoding="utf-8") as f:
-        queries = json.load(f)
-    
-    with open("/Users/oraichain/Desktop/rag/TN/LIGHTRAG/example_benchmark/rertrieval_results.json", "r", encoding="utf-8") as f:
-        model_results = json.load(f)
-
-    # Kết quả retrieval từ các mô hình khác nhau (theo thứ tự giảm dần về độ liên quan)
-    # model_results = {
-    #     "LightRAG_hybrid": {
-    #         "What is LightRAG?": [
-    #             "LightRAG is a simple and fast Retrieval-Augmented Generation system.",
-    #             "LightRAG uses a hybrid approach combining knowledge graphs and vector search.",
-    #             "RAG systems retrieve relevant documents and then generate responses based on them."
-    #         ],
-    #         "How does BGE-M3 work?": [
-    #             "BGE-M3 is a powerful embedding model for text retrieval.",
-    #             "BGE-M3 is based on the BERT architecture with improvements for multilingual support.",
-    #             "Vector databases store embeddings for efficient similarity search."
-    #         ],
-    #         "What are the benefits of knowledge graphs?": [
-    #             "Knowledge graphs can improve retrieval by capturing relationships between entities.",
-    #             "Knowledge graphs represent relationships between entities as a graph structure.",
-    #             "LightRAG uses a hybrid approach combining knowledge graphs and vector search."
-    #         ]
-    #     },
-    #     "Naive_RAG": {
-    #         "What is LightRAG?": [
-    #             "LightRAG is a simple and fast Retrieval-Augmented Generation system.",
-    #             "RAG systems retrieve relevant documents and then generate responses based on them.",
-    #             "Retrieval-Augmented Generation combines retrieval and generation for better results."
-    #         ],
-    #         "How does BGE-M3 work?": [
-    #             "BGE-M3 is a powerful embedding model for text retrieval.",
-    #             "Vector databases store embeddings for efficient similarity search.",
-    #             "Retrieval-Augmented Generation combines retrieval and generation for better results."
-    #         ],
-    #         "What are the benefits of knowledge graphs?": [
-    #             "Knowledge graphs can improve retrieval by capturing relationships between entities.",
-    #             "Vector databases store embeddings for efficient similarity search.",
-    #             "LightRAG uses a hybrid approach combining knowledge graphs and vector search."
-    #         ]
-    #     }
-    # }
-
-    # # Ground truth
-    # ground_truth = {
-    #     "What is LightRAG?": [
-    #         "LightRAG is a simple and fast Retrieval-Augmented Generation system.",
-    #         "LightRAG uses a hybrid approach combining knowledge graphs and vector search."
-    #     ],
-    #     "How does BGE-M3 work?": [
-    #         "BGE-M3 is a powerful embedding model for text retrieval.",
-    #         "BGE-M3 is based on the BERT architecture with improvements for multilingual support."
-    #     ],
-    #     "What are the benefits of knowledge graphs?": [
-    #         "Knowledge graphs can improve retrieval by capturing relationships between entities.",
-    #         "Knowledge graphs represent relationships between entities as a graph structure."
-    #     ]
-    # }
-    with open("/Users/oraichain/Desktop/rag/TN/LIGHTRAG/example_benchmark/ground_truth.json", "r", encoding="utf-8") as f:
-        ground_truth = json.load(f)
-    # Đánh giá các mô hình
-    results = evaluator.evaluate_multiple_models(
-        queries=queries,
-        model_results=model_results,
-        ground_truth=ground_truth,
-        at_k=2,
-        output_path="./direct_evaluation_results"
-    )
-    
-    # In kết quả tổng hợp
-    print("\nKết quả tổng hợp:")
-    for model_name, metrics in results.items():
-        print(f"\nMô hình: {model_name}")
-        for metric_name, metric_value in metrics.items():
-            print(f"  {metric_name}: {metric_value:.4f}")
-    
-    # # Ví dụ về cách tải dữ liệu từ file JSON
-    # print("\nVí dụ về cách tải dữ liệu từ file JSON:")
-    # print("# Lưu dữ liệu mẫu vào file JSON")
-    # evaluator.save_data_to_json(model_results, "model_results.json")
-    # evaluator.save_data_to_json(ground_truth, "ground_truth.json")
-    
-    # print("# Tải dữ liệu từ file JSON")
-    # loaded_model_results = evaluator.load_data_from_json("model_results.json")
-    # loaded_ground_truth = evaluator.load_data_from_json("ground_truth.json")
-    
-    # print("# Đánh giá với dữ liệu đã tải")
-    # loaded_results = evaluator.evaluate_multiple_models(
-    #     queries=queries,
-    #     model_results=loaded_model_results,
-    #     ground_truth=loaded_ground_truth,
-    #     at_k=3,
-    #     output_path="./direct_evaluation_results_loaded"
-    # ) 
+    except Exception as e:
+        logger.error(f"Lỗi chính: {str(e)}")
+        import traceback
+        traceback.print_exc()
