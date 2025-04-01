@@ -2430,8 +2430,341 @@ class LightRAG:
             self.ainsert_duo(data_original, data_translated, source_language, target_language, store_translations, translation_db_path)
         )
 
+## old version
+
+    # async def ainsert_duo(
+    #     self,
+    #     data_original,
+    #     data_translated=None,
+    #     source_language="Vietnamese",
+    #     target_language="English",
+    #     store_translations=True,
+    #     translation_db_path=None
+    # ):
+    #     """
+    #     Async insert a document in both its original language and translated version.
+    #     Ensures exact 1:1 mapping between entities and relationships.
+        
+    #     Args:
+    #         data_original: Original document data (Vietnamese)
+    #         data_translated: Translated document data (if None, will be generated using LLM)
+    #         source_language: Source language (default: "Vietnamese")
+    #         target_language: Target language (default: "English")
+    #         store_translations: Whether to store entity and relation translations
+    #         translation_db_path: Path to store translation mappings (defaults to working_dir/translations.json)
+        
+    #     Returns:
+    #         Tuple of (original_doc_id, translated_doc_id)
+    #     """
+    #     if translation_db_path is None:
+    #         translation_db_path = os.path.join(self.working_dir, "translations.json")
+        
+    #     logger.info(f"Starting duo insertion: {source_language} and {target_language}")
+        
+    #     # First process the original document
+    #     original_doc_id = compute_mdhash_id(data_original.strip(), prefix="doc-")
+    #     # original_doc_id = compute_mdhash_id(data_original.strip(), prefix="doc-")
+        
+    #     # Kiểm tra nếu văn bản đã tồn tại trong doc_status và đã PROCESSED
+    #     doc_exists = await self.doc_status.get_by_id(original_doc_id)
+    #     if doc_exists and doc_exists.get("status") == DocStatus.PROCESSED:
+    #         translated_doc_id = compute_mdhash_id(data_translated.strip(), prefix="doc-")
+    #         logger.info(f"Document {original_doc_id} already processed, skipping duo insertion")
+    #         return original_doc_id, translated_doc_id
+    #     # Store original document in doc status first
+    #     await self.doc_status.upsert({
+    #         original_doc_id: {
+    #             "content": data_original,
+    #             "content_summary": self._get_content_summary(data_original),
+    #             "content_length": len(data_original),
+    #             "status": DocStatus.PENDING,
+    #             "language": source_language,
+    #             "created_at": datetime.now().isoformat(),
+    #             "updated_at": datetime.now().isoformat(),
+    #         }
+    #     })
+        
+    #     # Store data to full_docs
+    #     await self.full_docs.upsert({original_doc_id: {"content": data_original.strip()}})
+        
+    #     # Create chunks for original document
+    #     original_chunks = {
+    #         compute_mdhash_id(dp["content"], prefix="chunk-"): {
+    #             **dp,
+    #             "full_doc_id": original_doc_id,
+    #         }
+    #         for dp in self.chunking_func(
+    #             data_original,
+    #             None,
+    #             False,
+    #             self.chunk_overlap_token_size,
+    #             self.chunk_token_size,
+    #             self.tiktoken_model_name,
+    #         )
+    #     }
+        
+    #     # Process the chunks and extract entities/relations
+    #     # Insert chunks to vector storage and text chunks storage
+    #     await asyncio.gather(
+    #         self.chunks_vdb.upsert(original_chunks),
+    #         self.text_chunks.upsert(original_chunks),
+    #     )
+        
+    #     # Extract entities and relations from original document
+    #     logger.info(f"Extracting entities and relations from {source_language} document")
+    #     original_extraction_result = await extract_entities(
+    #         original_chunks,
+    #         knowledge_graph_inst=self.chunk_entity_relation_graph,
+    #         entity_vdb=self.entities_vdb,
+    #         relationships_vdb=self.relationships_vdb,
+    #         llm_response_cache=self.llm_response_cache,
+    #         global_config=asdict(self),
+    #     )
+        
+    #     # Get entities and relations from the original document
+    #     original_entities = await self._get_document_entities(original_doc_id, original_chunks)
+    #     original_relations = await self._get_document_relations(original_doc_id, original_chunks)
+        
+    #     logger.info(f"Found {len(original_entities)} entities and {len(original_relations)} relations in {source_language} document")
+        
+    #     # Update status for original document
+    #     await self.doc_status.upsert({
+    #         original_doc_id: {
+    #             "status": DocStatus.PROCESSED,
+    #             "chunks_count": len(original_chunks),
+    #             "content": data_original,
+    #             "content_summary": self._get_content_summary(data_original),
+    #             "content_length": len(data_original),
+    #             "updated_at": datetime.now().isoformat(),
+    #         }
+    #     })
+        
+    #     # If translated data is not provided, generate it
+    #     if data_translated is None or data_translated == "":
+    #         logger.info(f"Generating translation for document in {target_language}")
+    #         data_translated = await self._translate_preserving_structure(
+    #             data_original, 
+    #             source_language,
+    #             target_language
+    #         )
+        
+    #     # Process translated document
+    #     translated_doc_id = compute_mdhash_id(data_translated.strip(), prefix="doc-")
+        
+    #     # Store translated document in doc status
+    #     await self.doc_status.upsert({
+    #         translated_doc_id: {
+    #             "content": data_translated,
+    #             "content_summary": self._get_content_summary(data_translated),
+    #             "content_length": len(data_translated),
+    #             "status": DocStatus.PENDING,
+    #             "language": target_language,
+    #             "created_at": datetime.now().isoformat(),
+    #             "updated_at": datetime.now().isoformat(),
+    #         }
+    #     })
+        
+    #     # Store data for translated document
+    #     await self.full_docs.upsert({translated_doc_id: {"content": data_translated.strip()}})
+        
+    #     # Create chunks for translated document
+    #     translated_chunks = {
+    #         compute_mdhash_id(dp["content"], prefix="chunk-"): {
+    #             **dp,
+    #             "full_doc_id": translated_doc_id,
+    #         }
+    #         for dp in self.chunking_func(
+    #             data_translated,
+    #             None,
+    #             False,
+    #             self.chunk_overlap_token_size,
+    #             self.chunk_token_size,
+    #             self.tiktoken_model_name,
+    #         )
+    #     }
+        
+    #     # Insert chunks to vector storage and text chunks storage
+    #     await asyncio.gather(
+    #         self.chunks_vdb.upsert(translated_chunks),
+    #         self.text_chunks.upsert(translated_chunks),
+    #     )
+        
+    #     # Extract corresponding entities and relations in the translated document
+    #     # using the original entities as a guide
+    #     logger.info(f"Extracting matching entities and relations from {target_language} document")
+        
+    #     # First pass: Extract matching entities - ONLY EXTRACT, DON'T SAVE YET
+    #     translated_entities = await self._extract_matching_entities(
+    #         original_entities,
+    #         data_translated,
+    #         source_language,
+    #         target_language,
+    #         translated_chunks
+    #     )
+        
+    #     # Second pass: Extract matching relations - ONLY EXTRACT, DON'T SAVE YET
+    #     translated_relations = await self._extract_matching_relations(
+    #         original_relations,
+    #         translated_entities,
+    #         data_translated,
+    #         source_language,
+    #         target_language,
+    #         translated_chunks
+    #     )
+        
+    #     logger.info(f"Extracted {len(translated_entities)} entities and {len(translated_relations)} relations in {target_language} document")
+        
+    #     # Verify the counts match
+    #     if len(original_entities) != len(translated_entities):
+    #         logger.warning(f"Entity count mismatch: {len(original_entities)} {source_language} vs {len(translated_entities)} {target_language}")
+    #         # Force entity count to match by requesting a fix
+    #         translated_entities = await self._fix_entity_count_mismatch(
+    #             original_entities,
+    #             translated_entities,
+    #             data_translated,
+    #             source_language,
+    #             target_language,
+    #             translated_chunks
+    #         )
+        
+    #     if len(original_relations) != len(translated_relations):
+    #         logger.warning(f"Relation count mismatch: {len(original_relations)} {source_language} vs {len(translated_relations)} {target_language}")
+    #         # Force relation count to match by requesting a fix
+    #         translated_relations = await self._fix_relation_count_mismatch(
+    #             original_relations,
+    #             translated_relations, 
+    #             translated_entities,
+    #             data_translated,
+    #             source_language, 
+    #             target_language,
+    #             translated_chunks
+    #         )
+        
+    #     # NOW THAT WE HAVE VERIFIED ENTITIES AND RELATIONS MATCH, SAVE THEM TO THE GRAPH
+    #     logger.info(f"Saving verified entities and relations to knowledge graph")
+        
+    #     nodes_data_map = {}
+    #     for entity in translated_entities:
+    #         entity_name = f'"{entity["name"].upper()}"'
+            
+    #         # Get first chunk ID for this document
+    #         chunk_id = next(iter(translated_chunks.keys()))
+            
+    #         # Chuẩn bị data
+    #         if entity_name not in nodes_data_map:
+    #             nodes_data_map[entity_name] = []
+            
+    #         nodes_data_map[entity_name].append({
+    #             "entity_type": f'"{entity["type"].upper()}"',
+    #             "description": entity["description"],
+    #             "source_id": chunk_id,
+    #             "language": target_language,
+    #         })
+
+    #     # Chuẩn bị dữ liệu cho edges
+    #     edges_data_map = {}
+    #     for relation in translated_relations:
+    #         src_entity = f'"{relation["source"].upper()}"'
+    #         tgt_entity = f'"{relation["target"].upper()}"'
+            
+    #         # Get first chunk ID for this document
+    #         chunk_id = next(iter(translated_chunks.keys()))
+            
+    #         edge_key = (src_entity, tgt_entity)
+    #         if edge_key not in edges_data_map:
+    #             edges_data_map[edge_key] = []
+            
+    #         edges_data_map[edge_key].append({
+    #             "description": relation["description"],
+    #             "keywords": relation["keywords"],
+    #             "weight": 1.0,
+    #             "source_id": chunk_id,
+    #             "language": target_language,
+    #         })
+    #     # 2. Thực hiện merge và upsert song song
+    #     all_entities_tasks = [
+    #         _merge_nodes_then_upsert(entity_name, nodes_data, 
+    #                             self.chunk_entity_relation_graph, asdict(self))
+    #         for entity_name, nodes_data in nodes_data_map.items()
+    #     ]
+
+    #     all_edges_tasks = [
+    #         _merge_edges_then_upsert(src_id, tgt_id, edges_data,
+    #                             self.chunk_entity_relation_graph, asdict(self))
+    #         for (src_id, tgt_id), edges_data in edges_data_map.items()
+    #     ]
+
+    #     # Thực thi song song
+    #     all_entities_data = await asyncio.gather(*all_entities_tasks)
+    #     all_relationships_data = await asyncio.gather(*all_edges_tasks)
+
+    #     # 3. Chuẩn bị dữ liệu cho vector databases
+    #     entities_vdb_data = {
+    #         compute_mdhash_id(entity_data["entity_name"], prefix="ent-"): {
+    #             "content": f"{entity_data['entity_name']} {entity_data['description']}",
+    #             "entity_name": entity_data["entity_name"],
+    #             "language": entity_data.get("language", target_language),
+    #         }
+    #         for entity_data in all_entities_data
+    #     }
+
+    #     relationships_vdb_data = {
+    #         compute_mdhash_id(rel_data["src_id"] + rel_data["tgt_id"], prefix="rel-"): {
+    #             "content": f"{rel_data['keywords']} {rel_data['src_id']} {rel_data['tgt_id']} {rel_data['description']}",
+    #             "src_id": rel_data["src_id"],
+    #             "tgt_id": rel_data["tgt_id"],
+    #             "language": rel_data.get("language", target_language),
+    #         }
+    #         for rel_data in all_relationships_data
+    #     }
+
+    #     # 4. Thực hiện insert vector DB song song
+    #     await asyncio.gather(
+    #         self.entities_vdb.upsert(entities_vdb_data),
+    #         self.relationships_vdb.upsert(relationships_vdb_data)
+    #     )
+    #     # Update status for translated document
+    #     await self.doc_status.upsert({
+    #         translated_doc_id: {
+    #             "status": DocStatus.PROCESSED,
+    #             "chunks_count": len(translated_chunks),
+    #             "content": data_translated,
+    #             "content_summary": self._get_content_summary(data_translated),
+    #             "content_length": len(data_translated),
+    #             "updated_at": datetime.now().isoformat(),
+    #         }
+    #     })
+        
+    #     # Create cross-lingual edges between entities
+    #     logger.info(f"Creating cross-lingual edges between {source_language} and {target_language} entities")
+    #     await self._create_cross_lingual_edges(
+    #         original_entities,
+    #         translated_entities,
+    #         source_language,
+    #         target_language
+    #     )
+        
+    #     # Store translation pairs if requested
+    #     if store_translations:
+    #         logger.info(f"Storing translation pairs to {translation_db_path}")
+    #         await self._store_translation_pairs(
+    #             original_entities,
+    #             translated_entities,
+    #             original_relations,
+    #             translated_relations,
+    #             source_language,
+    #             target_language,
+    #             translation_db_path
+    #         )
+        
+    #     # Save changes to all storages
+    #     await self._insert_done()
+        
+    #     return original_doc_id, translated_doc_id
+### new_version
+
     async def ainsert_duo(
-        self,
+        self: LightRAG,
         data_original,
         data_translated=None,
         source_language="Vietnamese",
@@ -2441,7 +2774,7 @@ class LightRAG:
     ):
         """
         Async insert a document in both its original language and translated version.
-        Ensures exact 1:1 mapping between entities and relationships.
+        Ensures exact 1:1 mapping between entities and relationships with maximized parallel execution.
         
         Args:
             data_original: Original document data (Vietnamese)
@@ -2459,33 +2792,29 @@ class LightRAG:
         
         logger.info(f"Starting duo insertion: {source_language} and {target_language}")
         
-        # First process the original document
+        # Compute document IDs for original and translated docs
         original_doc_id = compute_mdhash_id(data_original.strip(), prefix="doc-")
-        # original_doc_id = compute_mdhash_id(data_original.strip(), prefix="doc-")
         
-        # Kiểm tra nếu văn bản đã tồn tại trong doc_status và đã PROCESSED
+        # Check if document already exists and is processed
         doc_exists = await self.doc_status.get_by_id(original_doc_id)
         if doc_exists and doc_exists.get("status") == DocStatus.PROCESSED:
-            translated_doc_id = compute_mdhash_id(data_translated.strip(), prefix="doc-")
+            translated_doc_id = compute_mdhash_id((data_translated or "").strip(), prefix="doc-")
             logger.info(f"Document {original_doc_id} already processed, skipping duo insertion")
             return original_doc_id, translated_doc_id
-        # Store original document in doc status first
-        await self.doc_status.upsert({
-            original_doc_id: {
-                "content": data_original,
-                "content_summary": self._get_content_summary(data_original),
-                "content_length": len(data_original),
-                "status": DocStatus.PENDING,
-                "language": source_language,
-                "created_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat(),
-            }
-        })
         
-        # Store data to full_docs
-        await self.full_docs.upsert({original_doc_id: {"content": data_original.strip()}})
+        # If translated data is not provided, generate it
+        if data_translated is None or data_translated == "":
+            logger.info(f"Generating translation for document in {target_language}")
+            data_translated = await self._translate_preserving_structure(
+                data_original, 
+                source_language,
+                target_language
+            )
         
-        # Create chunks for original document
+        # Compute translated document ID
+        translated_doc_id = compute_mdhash_id(data_translated.strip(), prefix="doc-")
+        
+        # Create chunks for both original and translated documents
         original_chunks = {
             compute_mdhash_id(dp["content"], prefix="chunk-"): {
                 **dp,
@@ -2501,71 +2830,6 @@ class LightRAG:
             )
         }
         
-        # Process the chunks and extract entities/relations
-        # Insert chunks to vector storage and text chunks storage
-        await asyncio.gather(
-            self.chunks_vdb.upsert(original_chunks),
-            self.text_chunks.upsert(original_chunks),
-        )
-        
-        # Extract entities and relations from original document
-        logger.info(f"Extracting entities and relations from {source_language} document")
-        original_extraction_result = await extract_entities(
-            original_chunks,
-            knowledge_graph_inst=self.chunk_entity_relation_graph,
-            entity_vdb=self.entities_vdb,
-            relationships_vdb=self.relationships_vdb,
-            llm_response_cache=self.llm_response_cache,
-            global_config=asdict(self),
-        )
-        
-        # Get entities and relations from the original document
-        original_entities = await self._get_document_entities(original_doc_id, original_chunks)
-        original_relations = await self._get_document_relations(original_doc_id, original_chunks)
-        
-        logger.info(f"Found {len(original_entities)} entities and {len(original_relations)} relations in {source_language} document")
-        
-        # Update status for original document
-        await self.doc_status.upsert({
-            original_doc_id: {
-                "status": DocStatus.PROCESSED,
-                "chunks_count": len(original_chunks),
-                "content": data_original,
-                "content_summary": self._get_content_summary(data_original),
-                "content_length": len(data_original),
-                "updated_at": datetime.now().isoformat(),
-            }
-        })
-        
-        # If translated data is not provided, generate it
-        if data_translated is None or data_translated == "":
-            logger.info(f"Generating translation for document in {target_language}")
-            data_translated = await self._translate_preserving_structure(
-                data_original, 
-                source_language,
-                target_language
-            )
-        
-        # Process translated document
-        translated_doc_id = compute_mdhash_id(data_translated.strip(), prefix="doc-")
-        
-        # Store translated document in doc status
-        await self.doc_status.upsert({
-            translated_doc_id: {
-                "content": data_translated,
-                "content_summary": self._get_content_summary(data_translated),
-                "content_length": len(data_translated),
-                "status": DocStatus.PENDING,
-                "language": target_language,
-                "created_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat(),
-            }
-        })
-        
-        # Store data for translated document
-        await self.full_docs.upsert({translated_doc_id: {"content": data_translated.strip()}})
-        
-        # Create chunks for translated document
         translated_chunks = {
             compute_mdhash_id(dp["content"], prefix="chunk-"): {
                 **dp,
@@ -2581,26 +2845,120 @@ class LightRAG:
             )
         }
         
-        # Insert chunks to vector storage and text chunks storage
-        await asyncio.gather(
+        # Initialize all document metadata and storage operations in parallel
+        init_tasks = [
+            # Store document metadata
+            self.doc_status.upsert({
+                original_doc_id: {
+                    "content": data_original,
+                    "content_summary": self._get_content_summary(data_original),
+                    "content_length": len(data_original),
+                    "status": DocStatus.PENDING,
+                    "language": source_language,
+                    "created_at": datetime.now().isoformat(),
+                    "updated_at": datetime.now().isoformat(),
+                }
+            }),
+            self.doc_status.upsert({
+                translated_doc_id: {
+                    "content": data_translated,
+                    "content_summary": self._get_content_summary(data_translated),
+                    "content_length": len(data_translated),
+                    "status": DocStatus.PENDING,
+                    "language": target_language,
+                    "created_at": datetime.now().isoformat(),
+                    "updated_at": datetime.now().isoformat(),
+                }
+            }),
+            # Store full document content
+            self.full_docs.upsert({original_doc_id: {"content": data_original.strip()}}),
+            self.full_docs.upsert({translated_doc_id: {"content": data_translated.strip()}}),
+            # Store chunks in vector and text storage
+            self.chunks_vdb.upsert(original_chunks),
+            self.text_chunks.upsert(original_chunks),
             self.chunks_vdb.upsert(translated_chunks),
             self.text_chunks.upsert(translated_chunks),
-        )
+        ]
         
-        # Extract corresponding entities and relations in the translated document
-        # using the original entities as a guide
+        # Execute all initialization tasks in parallel
+        await asyncio.gather(*init_tasks)
+        
+        # Update status to processing
+        processing_tasks = [
+            self.doc_status.upsert({
+                original_doc_id: {
+                    "status": DocStatus.PROCESSING,
+                    "updated_at": datetime.now().isoformat(),
+                }
+            }),
+            self.doc_status.upsert({
+                translated_doc_id: {
+                    "status": DocStatus.PROCESSING,
+                    "updated_at": datetime.now().isoformat(),
+                }
+            })
+        ]
+        
+        await asyncio.gather(*processing_tasks)
+        
+        # Extract entities and relations from original document with concurrency
+        logger.info(f"Extracting entities and relations from {source_language} document")
+        
+        # We can run the entity extraction and getting the entities/relations in parallel
+        extraction_tasks = [
+            extract_entities(
+                original_chunks,
+                knowledge_graph_inst=self.chunk_entity_relation_graph,
+                entity_vdb=self.entities_vdb,
+                relationships_vdb=self.relationships_vdb,
+                llm_response_cache=self.llm_response_cache,
+                global_config=asdict(self),
+            )
+        ]
+        
+        # Wait for extraction to complete
+        await asyncio.gather(*extraction_tasks)
+        
+        # Get entities and relations from original document
+        doc_data_tasks = [
+            self._get_document_entities(original_doc_id, original_chunks),
+            self._get_document_relations(original_doc_id, original_chunks)
+        ]
+        
+        original_entities, original_relations = await asyncio.gather(*doc_data_tasks)
+        
+        logger.info(f"Found {len(original_entities)} entities and {len(original_relations)} relations in {source_language} document")
+        
+        # Update status for original document
+        await self.doc_status.upsert({
+            original_doc_id: {
+                "status": DocStatus.PROCESSED,
+                "chunks_count": len(original_chunks),
+                "content": data_original,
+                "content_summary": self._get_content_summary(data_original),
+                "content_length": len(data_original),
+                "updated_at": datetime.now().isoformat(),
+            }
+        })
+        
+        # Extract corresponding entities and relations in the translated document using parallel processing
         logger.info(f"Extracting matching entities and relations from {target_language} document")
         
-        # First pass: Extract matching entities - ONLY EXTRACT, DON'T SAVE YET
-        translated_entities = await self._extract_matching_entities(
-            original_entities,
-            data_translated,
-            source_language,
-            target_language,
-            translated_chunks
-        )
+        # Extract entities and relations in parallel
+        matching_tasks = [
+            self._extract_matching_entities(
+                original_entities,
+                data_translated,
+                source_language,
+                target_language,
+                translated_chunks
+            ),
+            # We'll get relations after entities are extracted
+        ]
         
-        # Second pass: Extract matching relations - ONLY EXTRACT, DON'T SAVE YET
+        translated_entities = await matching_tasks[0]
+        
+        # Now we can get the relations using the translated entities
         translated_relations = await self._extract_matching_relations(
             original_relations,
             translated_entities,
@@ -2612,175 +2970,51 @@ class LightRAG:
         
         logger.info(f"Extracted {len(translated_entities)} entities and {len(translated_relations)} relations in {target_language} document")
         
-        # Verify the counts match
+        # Verify counts match and fix if needed - can run in parallel
+        verification_tasks = []
+        
         if len(original_entities) != len(translated_entities):
             logger.warning(f"Entity count mismatch: {len(original_entities)} {source_language} vs {len(translated_entities)} {target_language}")
             # Force entity count to match by requesting a fix
-            translated_entities = await self._fix_entity_count_mismatch(
-                original_entities,
-                translated_entities,
-                data_translated,
-                source_language,
-                target_language,
-                translated_chunks
+            verification_tasks.append(
+                self._fix_entity_count_mismatch(
+                    original_entities,
+                    translated_entities,
+                    data_translated,
+                    source_language,
+                    target_language,
+                    translated_chunks
+                )
             )
         
         if len(original_relations) != len(translated_relations):
             logger.warning(f"Relation count mismatch: {len(original_relations)} {source_language} vs {len(translated_relations)} {target_language}")
             # Force relation count to match by requesting a fix
-            translated_relations = await self._fix_relation_count_mismatch(
-                original_relations,
-                translated_relations, 
-                translated_entities,
-                data_translated,
-                source_language, 
-                target_language,
-                translated_chunks
+            verification_tasks.append(
+                self._fix_relation_count_mismatch(
+                    original_relations,
+                    translated_relations, 
+                    translated_entities,
+                    data_translated,
+                    source_language, 
+                    target_language,
+                    translated_chunks
+                )
             )
         
-        # NOW THAT WE HAVE VERIFIED ENTITIES AND RELATIONS MATCH, SAVE THEM TO THE GRAPH
-        logger.info(f"Saving verified entities and relations to knowledge graph")
+        # Execute verification tasks if needed
+        if verification_tasks:
+            verification_results = await asyncio.gather(*verification_tasks)
+            
+            # Update entities and relations with fixed versions
+            if len(original_entities) != len(translated_entities):
+                translated_entities = verification_results[0]
+                verification_results = verification_results[1:]
+            
+            if len(original_relations) != len(translated_relations):
+                translated_relations = verification_results[0]
         
-        # Save entities to graph and vector DB
-        # for entity in translated_entities:
-        #     entity_name = f'"{entity["name"].upper()}"'
-            
-        #     # Get first chunk ID for this document
-        #     chunk_id = next(iter(translated_chunks.keys()))
-            
-        #     # Create node data
-        #     node_data = {
-        #         "entity_type": f'"{entity["type"].upper()}"',
-        #         "description": entity["description"],
-        #         "source_id": chunk_id,
-        #         "language": target_language,  # Add language metadata
-        #     }
-            
-        #     # Add to knowledge graph
-        #     await self.chunk_entity_relation_graph.upsert_node(entity_name, node_data)
-            
-        #     # Add to vector database
-        #     entity_id = compute_mdhash_id(entity_name, prefix="ent-")
-        #     await self.entities_vdb.upsert({
-        #         entity_id: {
-        #             "content": f"{entity_name} {entity['description']}",
-        #             "entity_name": entity_name,
-        #             "language": target_language,  # Add language metadata
-        #         }
-        #     })
-
-        # Save relations to graph and vector DB
-        # for relation in translated_relations:
-        #     src_entity = f'"{relation["source"].upper()}"'
-        #     tgt_entity = f'"{relation["target"].upper()}"'
-            
-        #     # Get first chunk ID for this document
-        #     chunk_id = next(iter(translated_chunks.keys()))
-            
-        #     # Create edge data
-        #     edge_data = {
-        #         "description": relation["description"],
-        #         "keywords": relation["keywords"],
-        #         "weight": 1.0,
-        #         "source_id": chunk_id,
-        #         "language": target_language,  # Add language metadata
-        #     }
-            
-        #     # Ensure both nodes exist
-        #     for entity in [src_entity, tgt_entity]:
-        #         if not await self.chunk_entity_relation_graph.has_node(entity):
-        #             # Create placeholder node
-        #             placeholder_data = {
-        #                 "entity_type": '"UNKNOWN"',
-        #                 "description": "Auto-created entity for relation",
-        #                 "source_id": chunk_id,
-        #                 "language": target_language,  # Add language metadata
-        #             }
-        #             await self.chunk_entity_relation_graph.upsert_node(entity, placeholder_data)
-            
-        #     # Add edge to knowledge graph
-        #     await self.chunk_entity_relation_graph.upsert_edge(src_entity, tgt_entity, edge_data)
-            
-        #     # Add to vector database
-        #     relation_id = compute_mdhash_id(src_entity + tgt_entity, prefix="rel-")
-        #     await self.relationships_vdb.upsert({
-        #         relation_id: {
-        #             "content": f"{relation['keywords']} {src_entity} {tgt_entity} {relation['description']}",
-        #             "src_id": src_entity,
-        #             "tgt_id": tgt_entity,
-        #             "language": target_language,  # Add language metadata
-        #         }
-        #     })
-
-        # for entity in translated_entities:
-        #     entity_name = f'"{entity["name"].upper()}"'
-            
-        #     # Get first chunk ID for this document
-        #     chunk_id = next(iter(translated_chunks.keys()))
-            
-        #     # Create nodes_data for merging
-        #     nodes_data = [{
-        #         "entity_type": f'"{entity["type"].upper()}"',
-        #         "description": entity["description"],
-        #         "source_id": chunk_id,
-        #         "language": target_language,
-        #     }]
-            
-        #     # Use _merge_nodes_then_upsert instead of direct upsert_node
-        #     merged_node_data = await _merge_nodes_then_upsert(
-        #         entity_name=entity_name,
-        #         nodes_data=nodes_data,
-        #         knowledge_graph_inst=self.chunk_entity_relation_graph,
-        #         global_config=asdict(self)
-        #     )
-            
-        #     # Add to vector database
-        #     entity_id = compute_mdhash_id(entity_name, prefix="ent-")
-        #     await self.entities_vdb.upsert({
-        #         entity_id: {
-        #             "content": f"{entity_name} {entity['description']}",
-        #             "entity_name": entity_name,
-        #             "language": merged_node_data.get("language", target_language),
-        #         }
-        #     })
-
-        # for relation in translated_relations:
-        #     src_entity = f'"{relation["source"].upper()}"'
-        #     tgt_entity = f'"{relation["target"].upper()}"'
-            
-        #     # Get first chunk ID for this document
-        #     chunk_id = next(iter(translated_chunks.keys()))
-            
-        #     # Create edges_data for merging
-        #     edges_data = [{
-        #         "description": relation["description"],
-        #         "keywords": relation["keywords"],
-        #         "weight": 1.0,
-        #         "source_id": chunk_id,
-        #         "language": target_language,
-        #     }]
-            
-        #     # Use _merge_edges_then_upsert instead of direct upsert_edge
-        #     # Điều này sẽ kiểm tra và merge các node và edge hiện có
-        #     merged_edge_data = await _merge_edges_then_upsert(
-        #         src_id=src_entity,
-        #         tgt_id=tgt_entity,
-        #         edges_data=edges_data,
-        #         knowledge_graph_inst=self.chunk_entity_relation_graph,
-        #         global_config=asdict(self)
-        #     )
-            
-        #     # Add to vector database
-        #     relation_id = compute_mdhash_id(src_entity + tgt_entity, prefix="rel-")
-        #     await self.relationships_vdb.upsert({
-        #         relation_id: {
-        #             "content": f"{relation['keywords']} {src_entity} {tgt_entity} {relation['description']}",
-        #             "src_id": src_entity,
-        #             "tgt_id": tgt_entity,
-        #             "language": merged_edge_data.get("language", target_language),
-        #         }
-        #     })
-
+        # Prepare data for batch operations - this is for translated entities/relations
         nodes_data_map = {}
         for entity in translated_entities:
             entity_name = f'"{entity["name"].upper()}"'
@@ -2788,7 +3022,7 @@ class LightRAG:
             # Get first chunk ID for this document
             chunk_id = next(iter(translated_chunks.keys()))
             
-            # Chuẩn bị data
+            # Prepare data
             if entity_name not in nodes_data_map:
                 nodes_data_map[entity_name] = []
             
@@ -2799,7 +3033,7 @@ class LightRAG:
                 "language": target_language,
             })
 
-        # Chuẩn bị dữ liệu cho edges
+        # Prepare data for edges
         edges_data_map = {}
         for relation in translated_relations:
             src_entity = f'"{relation["source"].upper()}"'
@@ -2819,85 +3053,116 @@ class LightRAG:
                 "source_id": chunk_id,
                 "language": target_language,
             })
-        # 2. Thực hiện merge và upsert song song
-        all_entities_tasks = [
-            _merge_nodes_then_upsert(entity_name, nodes_data, 
-                                self.chunk_entity_relation_graph, asdict(self))
-            for entity_name, nodes_data in nodes_data_map.items()
-        ]
-
-        all_edges_tasks = [
-            _merge_edges_then_upsert(src_id, tgt_id, edges_data,
-                                self.chunk_entity_relation_graph, asdict(self))
-            for (src_id, tgt_id), edges_data in edges_data_map.items()
-        ]
-
-        # Thực thi song song
-        all_entities_data = await asyncio.gather(*all_entities_tasks)
-        all_relationships_data = await asyncio.gather(*all_edges_tasks)
-
-        # 3. Chuẩn bị dữ liệu cho vector databases
-        entities_vdb_data = {
-            compute_mdhash_id(entity_data["entity_name"], prefix="ent-"): {
+        
+        # Create tasks for entity and relation merging
+        merge_tasks = []
+        
+        # Add entity merge tasks
+        for entity_name, nodes_data in nodes_data_map.items():
+            merge_tasks.append(
+                _merge_nodes_then_upsert(
+                    entity_name, 
+                    nodes_data,
+                    self.chunk_entity_relation_graph, 
+                    asdict(self)
+                )
+            )
+        
+        # Add relation merge tasks
+        for (src_id, tgt_id), edges_data in edges_data_map.items():
+            merge_tasks.append(
+                _merge_edges_then_upsert(
+                    src_id, 
+                    tgt_id, 
+                    edges_data,
+                    self.chunk_entity_relation_graph, 
+                    asdict(self)
+                )
+            )
+        
+        # Execute all merge operations in parallel
+        all_merge_results = await asyncio.gather(*merge_tasks)
+        
+        # Split results into entities and relationships
+        # First n results are entities, where n is the number of entities
+        entity_count = len(nodes_data_map)
+        all_entities_data = all_merge_results[:entity_count]
+        all_relationships_data = all_merge_results[entity_count:]
+        
+        # Prepare data for vector databases - do this in separate loop to not block merge operations
+        entities_vdb_data = {}
+        for entity_data in all_entities_data:
+            if not entity_data:
+                continue
+            
+            entity_id = compute_mdhash_id(entity_data["entity_name"], prefix="ent-")
+            entities_vdb_data[entity_id] = {
                 "content": f"{entity_data['entity_name']} {entity_data['description']}",
                 "entity_name": entity_data["entity_name"],
                 "language": entity_data.get("language", target_language),
             }
-            for entity_data in all_entities_data
-        }
 
-        relationships_vdb_data = {
-            compute_mdhash_id(rel_data["src_id"] + rel_data["tgt_id"], prefix="rel-"): {
+        relationships_vdb_data = {}
+        for rel_data in all_relationships_data:
+            if not rel_data:
+                continue
+                
+            relation_id = compute_mdhash_id(rel_data["src_id"] + rel_data["tgt_id"], prefix="rel-")
+            relationships_vdb_data[relation_id] = {
                 "content": f"{rel_data['keywords']} {rel_data['src_id']} {rel_data['tgt_id']} {rel_data['description']}",
                 "src_id": rel_data["src_id"],
                 "tgt_id": rel_data["tgt_id"],
                 "language": rel_data.get("language", target_language),
             }
-            for rel_data in all_relationships_data
-        }
-
-        # 4. Thực hiện insert vector DB song song
-        await asyncio.gather(
+        
+        # Final tasks to run in parallel
+        final_tasks = [
+            # Update vector databases
             self.entities_vdb.upsert(entities_vdb_data),
-            self.relationships_vdb.upsert(relationships_vdb_data)
-        )
-        # Update status for translated document
-        await self.doc_status.upsert({
-            translated_doc_id: {
-                "status": DocStatus.PROCESSED,
-                "chunks_count": len(translated_chunks),
-                "content": data_translated,
-                "content_summary": self._get_content_summary(data_translated),
-                "content_length": len(data_translated),
-                "updated_at": datetime.now().isoformat(),
-            }
-        })
-        
-        # Create cross-lingual edges between entities
-        logger.info(f"Creating cross-lingual edges between {source_language} and {target_language} entities")
-        await self._create_cross_lingual_edges(
-            original_entities,
-            translated_entities,
-            source_language,
-            target_language
-        )
-        
-        # Store translation pairs if requested
-        if store_translations:
-            logger.info(f"Storing translation pairs to {translation_db_path}")
-            await self._store_translation_pairs(
+            self.relationships_vdb.upsert(relationships_vdb_data),
+            
+            # Update document status
+            self.doc_status.upsert({
+                translated_doc_id: {
+                    "status": DocStatus.PROCESSED,
+                    "chunks_count": len(translated_chunks),
+                    "content": data_translated,
+                    "content_summary": self._get_content_summary(data_translated),
+                    "content_length": len(data_translated),
+                    "updated_at": datetime.now().isoformat(),
+                }
+            }),
+            
+            # Create cross-lingual edges
+            self._create_cross_lingual_edges(
                 original_entities,
                 translated_entities,
-                original_relations,
-                translated_relations,
                 source_language,
-                target_language,
-                translation_db_path
+                target_language
             )
+        ]
+        
+        # Add translation storage if requested
+        if store_translations:
+            final_tasks.append(
+                self._store_translation_pairs(
+                    original_entities,
+                    translated_entities,
+                    original_relations,
+                    translated_relations,
+                    source_language,
+                    target_language,
+                    translation_db_path
+                )
+            )
+        
+        # Execute all final tasks in parallel
+        await asyncio.gather(*final_tasks)
         
         # Save changes to all storages
         await self._insert_done()
         
+        logger.info(f"Duo insertion completed successfully")
         return original_doc_id, translated_doc_id
 
     async def _get_document_entities(self, doc_id: str, chunks: dict = None) -> list[dict]:
