@@ -30,8 +30,12 @@ from .operate import (
     kg_query_with_keywords,
     mix_kg_vector_query,
     naive_query,
-    kg_retrieval
+    kg_retrieval,
+    _merge_nodes_then_upsert,
+    _merge_edges_then_upsert
 )
+
+
 from .prompt import GRAPH_FIELD_SEP
 from .utils import (
     EmbeddingFunc,
@@ -645,7 +649,8 @@ class LightRAG:
         split_by_character: str | None = None,
         split_by_character_only: bool = False,
         language: str = "Vietnamese" ,
-        matching_method: str = "hybrid" 
+        matching_method: str = "hybrid",
+        need_cross_language: bool = True,
     ) -> None:
         """Sync Insert documents with checkpoint support
 
@@ -656,7 +661,8 @@ class LightRAG:
             split_by_character is None, this parameter is ignored.
         """
         self.addon_params["current_language"] = language
-        
+        self.addon_params["matching_method"] = matching_method
+        self.addon_params["need_cross_language"] = need_cross_language
         loop = always_get_an_event_loop()
         loop.run_until_complete(
             self.ainsert(input, split_by_character, split_by_character_only, language, matching_method)
@@ -913,7 +919,8 @@ class LightRAG:
                 logger.info("New entities or relationships extracted.")
                 self.chunk_entity_relation_graph = new_kg
                 # Get newly extracted entities from this chunk
-
+                if not self.addon_params["need_cross_language"]:
+                    return
                 extracted_entities = []
                 for node in self.chunk_entity_relation_graph._graph.nodes():
                     node_data = self.chunk_entity_relation_graph._graph.nodes[node]
@@ -1149,7 +1156,7 @@ class LightRAG:
         target_entities: list[str],
         source_language: str,
         target_language: str,
-        similarity_threshold: float = 0.80
+        similarity_threshold: float = 0.90
     ) -> list[tuple[str, str]]:
         """Match entities using embedding similarity directly from vector database"""
         matches = []
@@ -2454,7 +2461,14 @@ class LightRAG:
         
         # First process the original document
         original_doc_id = compute_mdhash_id(data_original.strip(), prefix="doc-")
+        # original_doc_id = compute_mdhash_id(data_original.strip(), prefix="doc-")
         
+        # Kiểm tra nếu văn bản đã tồn tại trong doc_status và đã PROCESSED
+        doc_exists = await self.doc_status.get_by_id(original_doc_id)
+        if doc_exists and doc_exists.get("status") == DocStatus.PROCESSED:
+            translated_doc_id = compute_mdhash_id(data_translated.strip(), prefix="doc-")
+            logger.info(f"Document {original_doc_id} already processed, skipping duo insertion")
+            return original_doc_id, translated_doc_id
         # Store original document in doc status first
         await self.doc_status.upsert({
             original_doc_id: {
@@ -2628,34 +2642,165 @@ class LightRAG:
         logger.info(f"Saving verified entities and relations to knowledge graph")
         
         # Save entities to graph and vector DB
+        # for entity in translated_entities:
+        #     entity_name = f'"{entity["name"].upper()}"'
+            
+        #     # Get first chunk ID for this document
+        #     chunk_id = next(iter(translated_chunks.keys()))
+            
+        #     # Create node data
+        #     node_data = {
+        #         "entity_type": f'"{entity["type"].upper()}"',
+        #         "description": entity["description"],
+        #         "source_id": chunk_id,
+        #         "language": target_language,  # Add language metadata
+        #     }
+            
+        #     # Add to knowledge graph
+        #     await self.chunk_entity_relation_graph.upsert_node(entity_name, node_data)
+            
+        #     # Add to vector database
+        #     entity_id = compute_mdhash_id(entity_name, prefix="ent-")
+        #     await self.entities_vdb.upsert({
+        #         entity_id: {
+        #             "content": f"{entity_name} {entity['description']}",
+        #             "entity_name": entity_name,
+        #             "language": target_language,  # Add language metadata
+        #         }
+        #     })
+
+        # Save relations to graph and vector DB
+        # for relation in translated_relations:
+        #     src_entity = f'"{relation["source"].upper()}"'
+        #     tgt_entity = f'"{relation["target"].upper()}"'
+            
+        #     # Get first chunk ID for this document
+        #     chunk_id = next(iter(translated_chunks.keys()))
+            
+        #     # Create edge data
+        #     edge_data = {
+        #         "description": relation["description"],
+        #         "keywords": relation["keywords"],
+        #         "weight": 1.0,
+        #         "source_id": chunk_id,
+        #         "language": target_language,  # Add language metadata
+        #     }
+            
+        #     # Ensure both nodes exist
+        #     for entity in [src_entity, tgt_entity]:
+        #         if not await self.chunk_entity_relation_graph.has_node(entity):
+        #             # Create placeholder node
+        #             placeholder_data = {
+        #                 "entity_type": '"UNKNOWN"',
+        #                 "description": "Auto-created entity for relation",
+        #                 "source_id": chunk_id,
+        #                 "language": target_language,  # Add language metadata
+        #             }
+        #             await self.chunk_entity_relation_graph.upsert_node(entity, placeholder_data)
+            
+        #     # Add edge to knowledge graph
+        #     await self.chunk_entity_relation_graph.upsert_edge(src_entity, tgt_entity, edge_data)
+            
+        #     # Add to vector database
+        #     relation_id = compute_mdhash_id(src_entity + tgt_entity, prefix="rel-")
+        #     await self.relationships_vdb.upsert({
+        #         relation_id: {
+        #             "content": f"{relation['keywords']} {src_entity} {tgt_entity} {relation['description']}",
+        #             "src_id": src_entity,
+        #             "tgt_id": tgt_entity,
+        #             "language": target_language,  # Add language metadata
+        #         }
+        #     })
+
+        # for entity in translated_entities:
+        #     entity_name = f'"{entity["name"].upper()}"'
+            
+        #     # Get first chunk ID for this document
+        #     chunk_id = next(iter(translated_chunks.keys()))
+            
+        #     # Create nodes_data for merging
+        #     nodes_data = [{
+        #         "entity_type": f'"{entity["type"].upper()}"',
+        #         "description": entity["description"],
+        #         "source_id": chunk_id,
+        #         "language": target_language,
+        #     }]
+            
+        #     # Use _merge_nodes_then_upsert instead of direct upsert_node
+        #     merged_node_data = await _merge_nodes_then_upsert(
+        #         entity_name=entity_name,
+        #         nodes_data=nodes_data,
+        #         knowledge_graph_inst=self.chunk_entity_relation_graph,
+        #         global_config=asdict(self)
+        #     )
+            
+        #     # Add to vector database
+        #     entity_id = compute_mdhash_id(entity_name, prefix="ent-")
+        #     await self.entities_vdb.upsert({
+        #         entity_id: {
+        #             "content": f"{entity_name} {entity['description']}",
+        #             "entity_name": entity_name,
+        #             "language": merged_node_data.get("language", target_language),
+        #         }
+        #     })
+
+        # for relation in translated_relations:
+        #     src_entity = f'"{relation["source"].upper()}"'
+        #     tgt_entity = f'"{relation["target"].upper()}"'
+            
+        #     # Get first chunk ID for this document
+        #     chunk_id = next(iter(translated_chunks.keys()))
+            
+        #     # Create edges_data for merging
+        #     edges_data = [{
+        #         "description": relation["description"],
+        #         "keywords": relation["keywords"],
+        #         "weight": 1.0,
+        #         "source_id": chunk_id,
+        #         "language": target_language,
+        #     }]
+            
+        #     # Use _merge_edges_then_upsert instead of direct upsert_edge
+        #     # Điều này sẽ kiểm tra và merge các node và edge hiện có
+        #     merged_edge_data = await _merge_edges_then_upsert(
+        #         src_id=src_entity,
+        #         tgt_id=tgt_entity,
+        #         edges_data=edges_data,
+        #         knowledge_graph_inst=self.chunk_entity_relation_graph,
+        #         global_config=asdict(self)
+        #     )
+            
+        #     # Add to vector database
+        #     relation_id = compute_mdhash_id(src_entity + tgt_entity, prefix="rel-")
+        #     await self.relationships_vdb.upsert({
+        #         relation_id: {
+        #             "content": f"{relation['keywords']} {src_entity} {tgt_entity} {relation['description']}",
+        #             "src_id": src_entity,
+        #             "tgt_id": tgt_entity,
+        #             "language": merged_edge_data.get("language", target_language),
+        #         }
+        #     })
+
+        nodes_data_map = {}
         for entity in translated_entities:
             entity_name = f'"{entity["name"].upper()}"'
             
             # Get first chunk ID for this document
             chunk_id = next(iter(translated_chunks.keys()))
             
-            # Create node data
-            node_data = {
+            # Chuẩn bị data
+            if entity_name not in nodes_data_map:
+                nodes_data_map[entity_name] = []
+            
+            nodes_data_map[entity_name].append({
                 "entity_type": f'"{entity["type"].upper()}"',
                 "description": entity["description"],
                 "source_id": chunk_id,
-                "language": target_language,  # Add language metadata
-            }
-            
-            # Add to knowledge graph
-            await self.chunk_entity_relation_graph.upsert_node(entity_name, node_data)
-            
-            # Add to vector database
-            entity_id = compute_mdhash_id(entity_name, prefix="ent-")
-            await self.entities_vdb.upsert({
-                entity_id: {
-                    "content": f"{entity_name} {entity['description']}",
-                    "entity_name": entity_name,
-                    "language": target_language,  # Add language metadata
-                }
+                "language": target_language,
             })
-        
-        # Save relations to graph and vector DB
+
+        # Chuẩn bị dữ liệu cho edges
+        edges_data_map = {}
         for relation in translated_relations:
             src_entity = f'"{relation["source"].upper()}"'
             tgt_entity = f'"{relation["target"].upper()}"'
@@ -2663,41 +2808,59 @@ class LightRAG:
             # Get first chunk ID for this document
             chunk_id = next(iter(translated_chunks.keys()))
             
-            # Create edge data
-            edge_data = {
+            edge_key = (src_entity, tgt_entity)
+            if edge_key not in edges_data_map:
+                edges_data_map[edge_key] = []
+            
+            edges_data_map[edge_key].append({
                 "description": relation["description"],
                 "keywords": relation["keywords"],
                 "weight": 1.0,
                 "source_id": chunk_id,
-                "language": target_language,  # Add language metadata
-            }
-            
-            # Ensure both nodes exist
-            for entity in [src_entity, tgt_entity]:
-                if not await self.chunk_entity_relation_graph.has_node(entity):
-                    # Create placeholder node
-                    placeholder_data = {
-                        "entity_type": '"UNKNOWN"',
-                        "description": "Auto-created entity for relation",
-                        "source_id": chunk_id,
-                        "language": target_language,  # Add language metadata
-                    }
-                    await self.chunk_entity_relation_graph.upsert_node(entity, placeholder_data)
-            
-            # Add edge to knowledge graph
-            await self.chunk_entity_relation_graph.upsert_edge(src_entity, tgt_entity, edge_data)
-            
-            # Add to vector database
-            relation_id = compute_mdhash_id(src_entity + tgt_entity, prefix="rel-")
-            await self.relationships_vdb.upsert({
-                relation_id: {
-                    "content": f"{relation['keywords']} {src_entity} {tgt_entity} {relation['description']}",
-                    "src_id": src_entity,
-                    "tgt_id": tgt_entity,
-                    "language": target_language,  # Add language metadata
-                }
+                "language": target_language,
             })
-        
+        # 2. Thực hiện merge và upsert song song
+        all_entities_tasks = [
+            _merge_nodes_then_upsert(entity_name, nodes_data, 
+                                self.chunk_entity_relation_graph, asdict(self))
+            for entity_name, nodes_data in nodes_data_map.items()
+        ]
+
+        all_edges_tasks = [
+            _merge_edges_then_upsert(src_id, tgt_id, edges_data,
+                                self.chunk_entity_relation_graph, asdict(self))
+            for (src_id, tgt_id), edges_data in edges_data_map.items()
+        ]
+
+        # Thực thi song song
+        all_entities_data = await asyncio.gather(*all_entities_tasks)
+        all_relationships_data = await asyncio.gather(*all_edges_tasks)
+
+        # 3. Chuẩn bị dữ liệu cho vector databases
+        entities_vdb_data = {
+            compute_mdhash_id(entity_data["entity_name"], prefix="ent-"): {
+                "content": f"{entity_data['entity_name']} {entity_data['description']}",
+                "entity_name": entity_data["entity_name"],
+                "language": entity_data.get("language", target_language),
+            }
+            for entity_data in all_entities_data
+        }
+
+        relationships_vdb_data = {
+            compute_mdhash_id(rel_data["src_id"] + rel_data["tgt_id"], prefix="rel-"): {
+                "content": f"{rel_data['keywords']} {rel_data['src_id']} {rel_data['tgt_id']} {rel_data['description']}",
+                "src_id": rel_data["src_id"],
+                "tgt_id": rel_data["tgt_id"],
+                "language": rel_data.get("language", target_language),
+            }
+            for rel_data in all_relationships_data
+        }
+
+        # 4. Thực hiện insert vector DB song song
+        await asyncio.gather(
+            self.entities_vdb.upsert(entities_vdb_data),
+            self.relationships_vdb.upsert(relationships_vdb_data)
+        )
         # Update status for translated document
         await self.doc_status.upsert({
             translated_doc_id: {

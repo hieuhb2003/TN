@@ -74,8 +74,8 @@ def create_rag(working_dir, model_func):
 # Thêm hàm để xử lý đối số từ dòng lệnh
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Chương trình xử lý dữ liệu với LightRAG")
-    parser.add_argument("--working_dir", type=str, default="./duo_graph", help="Đường dẫn tới thư mục làm việc")
-    parser.add_argument("--data_path", type=str, required=True, help="Đường dẫn tới file dữ liệu JSON")
+    parser.add_argument("--working_dir", type=str, default="./test_duo_4", help="Đường dẫn tới thư mục làm việc")
+    parser.add_argument("--data_path", type=str,default= "C:\\Users\\mhieu\\Desktop\\TN\\LIGHTRAG\\data\\sample_duo_data.json", help="Đường dẫn tới file dữ liệu JSON")
     return parser.parse_args()
 
 def insert_with_retry(rag, data_original, data_translated, target_language="English"):
