@@ -12,14 +12,14 @@ from lightrag.llm.openai import openai_complete_if_cache
 from transformers import AutoModel, AutoTokenizer, AutoModelForSequenceClassification
 import torch
 import random
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+# from langchain_huggingface import HuggingFaceEmbeddings
+# from langchain_community.vectorstores import FAISS
 
-WORKING_DIR = "/home/hungpv/projects/TN/LIGHTRAG/set_up_demo_rag"
+WORKING_DIR = "C:\\Users\\mhieu\\Desktop\\TN\\LIGHTRAG\\test_demo_graph"
 if not os.path.exists(WORKING_DIR):
     os.mkdir(WORKING_DIR)
 
-with open("/home/hungpv/projects/list_key_open_router/keys.json", 'r', encoding='utf-8') as f:
+with open("C:\\Users\\mhieu\\Desktop\\TN\\LIGHTRAG\\api_keys.json", 'r', encoding='utf-8') as f:
     OPENROUTER_API_KEYS = json.load(f)
 
 random.shuffle(OPENROUTER_API_KEYS)
@@ -225,7 +225,7 @@ def process_query(rag, query):
         return {query: [f"ERROR: {str(e)}"]}
 
 def main():
-    queries_file = "/home/hungpv/projects/TN/LIGHTRAG/data/small_queries.json"
+    queries_file = "C:\\Users\\mhieu\\Desktop\\TN\\LIGHTRAG\\data\\small_queries.json"
 
     rag = init_rag()
     # reranker_model, reranker_tokenizer = init_reranker()
@@ -233,7 +233,7 @@ def main():
     # embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-m3")
 
     queries = read_queries_from_file(queries_file)
-    queries = queries[:100]
+    queries = queries[:10]
     print(f"Loaded {len(queries)} queries from file")
 
     # vector_store = FAISS.load_local(
@@ -272,11 +272,11 @@ def main():
             print(model_name)
             model_results_with_score[model_name][query] = chunks
 
-        output_file = "/home/hungpv/projects/TN/LIGHTRAG/result_26_3/retrieval_results_true_method.json"
+        output_file = "retrieval_results_true_method.json"
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(model_results, f, ensure_ascii=False, indent=2)
 
-        output_file2 = "/home/hungpv/projects/TN/LIGHTRAG/result_26_3/retrieval_results_with_score_true_method.json"
+        output_file2 ="retrieval_results_with_score_true_method.json"
         with open(output_file2, 'w', encoding='utf-8') as f:
             json.dump(model_results_with_score, f, ensure_ascii=False, indent=2)
         print(i)

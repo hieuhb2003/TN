@@ -1,34 +1,11 @@
-import os
+from hashlib import md5
 
-from lightrag import LightRAG, QueryParam
-from lightrag.llm.openai import gpt_4o_mini_complete, openai_embed
+txt = "b. He/she has worked in aviation security for at least 03 years or at least 02 years if he/she has worked in the police or military force;\nc. He/she has completed the aviation security supervisor training course and obtained the aviation security training certificate or certificate as prescribed.\nSeventh. Standards of internal security supervisors:\na. He/she has worked in aviation security for at least 02 years or at least 01 year if he/she has worked in the police or military force;\nb. He/she has completed an aviation security supervisor training course and obtained a certificate of training in aviation security.\nEight. Aviation security supervisors and internal security supervisors shall be trained in accordance with regulations on aviation security training promulgated by the Minister of Transport.\nArticle 111. - Reporting and statistics on aviation security\n1. The Civil Aviation Authority of Vietnam shall establish and guide the reporting and statistical system on aviation security assurance for the agencies and units in the aviation sector as prescribed by law.\n2. The following organizations shall report to the Civil Aviation Administration of Vietnam under Clause 1 of this Article:\na. Airport authorities;\nb.Airlines;\nc. Airport or aerodrome operators;\nd.Air traffic service enterprises; aircraft and aircraft equipment repair and maintenance enterprises;\ndd) Aviation security service providers;\ne. Aviation service providers.\ndd) Aviation security service providers;\ne. Aviation service providers.\n3. Upon the occurrence of serious violations of aviation security, potential threats to aviation security and safety or threats to adversely affect social order and safety, the organizations specified in Clause 2 of this Article must report to the Civil Aviation Authority of Vietnam as follows: make an initial report as soon as the case occurs by phone or other means of communication and report in writing within 24 hours according to the form specified in Appendix XXIV issued together with this Circular. Every month, the organizations specified at Points a, b, c, d and dd, Clause 2 of this Article shall report to the Civil Aviation Authority of Vietnam on cases of violation of aviation security recorded in the aviation security management system.\nFourth. For emergencies and response to acts of unlawful interference, units shall report as prescribed in Article 89 of this Circular."
+def compute_mdhash_id(content: str, prefix: str = "") -> str:
+    """
+    Compute a unique ID for a given content string.
 
-WORKING_DIR = "./dickens"
-
-rag = LightRAG(
-    working_dir=WORKING_DIR,
-    embedding_func=openai_embed,
-    llm_model_func=gpt_4o_mini_complete,
-    # llm_model_func=gpt_4o_complete
-)
-
-
-# Perform naive search
-print(
-    rag.query("What are the top themes in this story?", param=QueryParam(mode="naive"))
-)
-
-# Perform local search
-print(
-    rag.query("What are the top themes in this story?", param=QueryParam(mode="local"))
-)
-
-# Perform global search
-print(
-    rag.query("What are the top themes in this story?", param=QueryParam(mode="global"))
-)
-
-# Perform hybrid search
-print(
-    rag.query("What are the top themes in this story?", param=QueryParam(mode="hybrid"))
-)
+    The ID is a combination of the given prefix and the MD5 hash of the content string.
+    """
+    return prefix + md5(content.encode()).hexdigest()
+print(compute_mdhash_id(txt, "chunk-"))

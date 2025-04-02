@@ -36,6 +36,7 @@ from .base import (
 )
 from .prompt import GRAPH_FIELD_SEP, PROMPTS, get_prompt
 import time
+from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine_similarity
 
 
 def chunking_by_token_size(
@@ -716,6 +717,7 @@ async def kg_retrieval(
     knowledge_graph_inst: BaseGraphStorage,
     entities_vdb: BaseVectorStorage,
     relationships_vdb: BaseVectorStorage,
+    chunks_vdb: BaseVectorStorage,
     text_chunks_db: BaseKVStorage,
     query_param: QueryParam,
     global_config: dict[str, str],
@@ -766,6 +768,7 @@ async def kg_retrieval(
         knowledge_graph_inst,
         entities_vdb,
         relationships_vdb,
+        chunks_vdb,
         text_chunks_db,
         query_param,
     )
@@ -1182,6 +1185,7 @@ async def _build_retrieval_context(
     knowledge_graph_inst: BaseGraphStorage,
     entities_vdb: BaseVectorStorage,
     relationships_vdb: BaseVectorStorage,
+    chunks_vdb: BaseVectorStorage,
     text_chunks_db: BaseKVStorage,
     query_param: QueryParam,
 ):
@@ -1233,61 +1237,104 @@ async def _build_retrieval_context(
             relation_chunks_mapping,
         ) = hl_data
 
-    from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine_similarity
-
-    async def calculate_scores(query, chunks_mapping, vdb, is_entity=True):
+    async def calculate_scores(query, chunks_mapping, vdb, chunk_db, is_entity=True):
         # Get query embedding once
         query_embedding = await vdb.embedding_func([query])
         query_embedding = query_embedding[0].reshape(1, -1)  # Reshape for sklearn
         
-        # Batch process all texts that need embeddings
-        all_texts = []
-        text_to_key = {}
-        
-        for key, chunks in chunks_mapping.items():
-            all_texts.append(key)
-            text_to_key[key] = key
-            for chunk in chunks:
-                all_texts.append(chunk)
-                text_to_key[chunk] = chunk
-                
-        # Get embeddings in batches
-        batch_size = vdb._max_batch_size
-        embeddings_map = {}
-        
-        for i in range(0, len(all_texts), batch_size):
-            batch_texts = all_texts[i:i + batch_size]
-            batch_embeddings = await vdb.embedding_func(batch_texts)
-            
-            for text, embedding in zip(batch_texts, batch_embeddings):
-                embeddings_map[text_to_key[text]] = embedding
-### first version all chunk in one entity is the same rank
-### now version is score by ranking chunk by entity 
         # Calculate scores
         scored_chunks = []
-        rank = 0
         
-        for key, chunks in chunks_mapping.items():
-            # Get cached embedding for entity/relation
-            item_embedding = embeddings_map[key].reshape(1, -1)  # Reshape for sklearn
+        # Process each key in parallel
+        async def process_key(key, chunks):
+            key_results = []
+            print(f"Processing key: {key}")
+            # Get entity/relation embedding from database
+            item_embedding = None
+            
+            if is_entity:
+                # Try to load entity embedding from database
+                item_embedding = await vdb.get_entity_embedding(key)
+                if item_embedding is None:
+                    print("item_embedding is None")
+                    # Fallback to computing embedding if not found in database
+                    item_embeddings = await vdb.embedding_func([key])
+                    item_embedding = item_embeddings[0]
+                else:
+                    print("found item_embedding in database")
+            else:
+                # Try to extract source and target entities for relation
+                if "----" in key:
+                    src_id, tgt_id = key.split("----", 1)
+                    item_embedding = await vdb.get_relation_embedding(src_id, tgt_id)
+
+                # Fallback to computing embedding if not found
+                if item_embedding is None:
+                    print("item_embedding is None")
+                    item_embeddings = await vdb.embedding_func([key])
+                    item_embedding = item_embeddings[0]
+                else:
+                    print("found src_id and tgt_id")
+            # Reshape for sklearn
+            item_embedding = item_embedding.reshape(1, -1)
             item_similarity = sklearn_cosine_similarity(query_embedding, item_embedding)[0][0]
-            # rank = 0
-            # Calculate scores for each chunk
-            for chunk in chunks:
-                chunk_embedding = embeddings_map[chunk].reshape(1, -1)  # Reshape for sklearn
+            
+            # Batch process all chunks for this key
+            # 1. Create chunk IDs for database lookup
+            chunk_ids = [compute_mdhash_id(chunk, prefix="chunk-") for chunk in chunks]
+            
+            # 2. Load all chunk embeddings from database in parallel
+            chunk_embeddings = await asyncio.gather(*[chunk_db.get_chunk_embedding(chunk_id) for chunk_id in chunk_ids])
+            
+            # 3. Identify chunks that need embedding computation
+            chunks_to_compute = []
+            for i, embedding in enumerate(chunk_embeddings):
+                if embedding is None:
+                    chunks_to_compute.append((i, chunks[i]))
+            
+            # 4. Compute missing embeddings in batch
+            computed_embeddings = {}
+            if chunks_to_compute:
+                compute_chunks = [chunk for _, chunk in chunks_to_compute]
+                batch_embeddings = await chunk_db.embedding_func(compute_chunks)
+                
+                for (idx, _), embedding in zip(chunks_to_compute, batch_embeddings):
+                    computed_embeddings[idx] = embedding
+            
+            # 5. Calculate similarity scores for all chunks
+            for i, chunk in enumerate(chunks):
+                # Get embedding from either database or computed
+                chunk_embedding = chunk_embeddings[i]
+                if chunk_embedding is None:
+                    chunk_embedding = computed_embeddings[i]
+                
+                # Reshape for sklearn
+                chunk_embedding = chunk_embedding.reshape(1, -1)
                 content_similarity = sklearn_cosine_similarity(query_embedding, chunk_embedding)[0][0]
                 
-                position_score = 1.0 / (rank + 1)
-                total_score = 0.4 * item_similarity + 0.5 * content_similarity + 0.1 * position_score 
-                rank += 1
-                scored_chunks.append((chunk, total_score))
-                
+                # Calculate total score (without position score)
+                total_score = 0.4 * item_similarity + 0.6 * content_similarity
+                key_results.append((chunk, total_score))
             
-                    
+            return key_results
+        
+        # Process all keys in parallel
+        key_tasks = []
+        for key, chunks in chunks_mapping.items():
+            key_tasks.append(process_key(key, chunks))
+        
+        # Gather all results
+        all_key_results = await asyncio.gather(*key_tasks)
+        
+        # Flatten results
+        for key_result in all_key_results:
+            scored_chunks.extend(key_result)
+        
+        # Sort all chunks by score
         scored_chunks.sort(key=lambda x: x[1], reverse=True)
         return scored_chunks
 
-    # print("da den day chua")
+    print("da den day chua")
 
     ll_scored_chunks = []
     hl_scored_chunks = []
@@ -1298,6 +1345,7 @@ async def _build_retrieval_context(
             query=ll_keywords,
             chunks_mapping=entity_chunks_mapping, 
             vdb=entities_vdb, 
+            chunk_db=chunks_vdb,
             is_entity=True
         )
     # print("chac la den day roi")
@@ -1307,6 +1355,7 @@ async def _build_retrieval_context(
             query=hl_keywords,
             chunks_mapping=relation_chunks_mapping, 
             vdb=relationships_vdb, 
+            chunk_db=chunks_vdb,
             is_entity=False
         )
     # print("den day di pls")
@@ -1635,9 +1684,9 @@ async def _get_edge_data(
     relation_chunks_mapping = {}
     for edge in edge_datas:
         # Sử dụng description của relation làm key
-        relation_key = edge.get("description", "").strip()
-        if not relation_key:  # Nếu không có description, tạo key từ src_id và tgt_id
-            relation_key = f"{edge['src_id']}-{edge['tgt_id']}"
+        # relation_key = edge.get("description", "").strip()
+        # if not relation_key:  # Nếu không có description, tạo key từ src_id và tgt_id
+        relation_key = f"{edge['src_id']}----{edge['tgt_id']}"
             
         # Lấy các chunks liên quan đến relation này
         relation_chunks = []
