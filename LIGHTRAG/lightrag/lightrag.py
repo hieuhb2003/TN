@@ -36,7 +36,7 @@ from .operate import (
 )
 
 
-from .prompt import GRAPH_FIELD_SEP
+from .prompt import GRAPH_FIELD_SEP, PROMPTS
 from .utils import (
     EmbeddingFunc,
     compute_mdhash_id,
@@ -827,7 +827,9 @@ class LightRAG:
         logger.info(f"Number of batches to process: {len(docs_batches)}.")
 
         # 3. iterate over batches
-        for batch_idx, docs_batch in enumerate(docs_batches):
+        from tqdm import tqdm
+
+        for batch_idx, docs_batch in tqdm(enumerate(docs_batches), desc="Processing batches", total=len(docs_batches)):
             # 4. iterate over batch
             for doc_id_processing_status in docs_batch:
                 doc_id, status_doc = doc_id_processing_status
@@ -3025,7 +3027,9 @@ class LightRAG:
             # Prepare data
             if entity_name not in nodes_data_map:
                 nodes_data_map[entity_name] = []
-            
+            if entity["type"].lower() not in PROMPTS["DEFAULT_ENTITY_TYPES"] + PROMPTS["DEFAULT_ENTITY_TYPES_VI"]:
+                entity["type"] = "UNKNOWN"
+                            
             nodes_data_map[entity_name].append({
                 "entity_type": f'"{entity["type"].upper()}"',
                 "description": entity["description"],
@@ -3364,7 +3368,8 @@ class LightRAG:
                     entity_name = entity_parts[0].split('Entity:')[1].strip() if 'Entity:' in entity_parts[0] else entity_parts[0].strip()
                     entity_type = entity_parts[1].split('Type:')[1].strip() if 'Type:' in entity_parts[1] else entity_parts[1].strip()
                     entity_desc = entity_parts[2].split('Description:')[1].strip() if 'Description:' in entity_parts[2] else entity_parts[2].strip()
-                    
+                    if entity_type.lower() not in PROMPTS["DEFAULT_ENTITY_TYPES"] + PROMPTS["DEFAULT_ENTITY_TYPES_VI"]:
+                        entity_type = "UNKNOWN"                    
                     translated_entities.append({
                         "name": entity_name,
                         "type": entity_type,
