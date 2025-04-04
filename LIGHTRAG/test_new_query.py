@@ -159,9 +159,25 @@ def read_queries_from_file(file_path: str) -> List[str]:
     with open(file_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def sort_chunk(ll_chunk: List[tuple], hl_chunk: List[tuple]) -> List[tuple]:
+def sort_chunk(ll_chunk: List[tuple], hl_chunk: List[tuple] = None) -> List[tuple]:
+    if hl_chunk is None:
+        hl_chunk = []
+    # Kết hợp tất cả chunks
     total = ll_chunk + hl_chunk
-    reranked_chunks = sorted(total, key=lambda x: x[1], reverse=True) 
+    
+    # Tạo dictionary để lưu các giá trị x[0] với x[1] cao nhất
+    unique_chunks = {}
+    
+    # Duyệt qua tất cả các tuple trong total
+    for chunk, score in total:
+        # Nếu chunk chưa tồn tại trong unique_chunks hoặc score cao hơn giá trị hiện tại
+        if chunk not in unique_chunks or score > unique_chunks[chunk]:
+            unique_chunks[chunk] = score
+    
+    # Chuyển dictionary trở lại thành list các tuple và sắp xếp theo score giảm dần
+    reranked_chunks = [(chunk, score) for chunk, score in unique_chunks.items()]
+    reranked_chunks = sorted(reranked_chunks, key=lambda x: x[1], reverse=True)
+    
     return reranked_chunks
 
 def change_to_list(ls_chunk: List[tuple]):
@@ -183,6 +199,8 @@ def process_query(rag, query):
         )
         print("done retrieval")
         # return ll_chunk_list, hl_chunk_list
+        ll_chunk_list = sort_chunk(ll_chunk_list)
+        hl_chunk_list = sort_chunk(hl_chunk_list)
         combine_list_tuple = sort_chunk(ll_chunk_list, hl_chunk_list)
 
         print("done sort")
@@ -233,7 +251,7 @@ def main():
     # embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-m3")
 
     queries = read_queries_from_file(queries_file)
-    queries = queries[:10]
+    queries = queries[:1]
     print(f"Loaded {len(queries)} queries from file")
 
     # vector_store = FAISS.load_local(
@@ -252,6 +270,7 @@ def main():
         "LightRAG Global": {},
     }
     i = 1
+    time_start = time.time() 
     for query in queries:
         query_result, query_dict = process_query(rag, query)
 
@@ -281,6 +300,9 @@ def main():
             json.dump(model_results_with_score, f, ensure_ascii=False, indent=2)
         print(i)
         i+=1
+
+    time_end = time.time()  # Ghi nhận thời gian kết thúc
+    print(f"Total time: {time_end - time_start:.2f} seconds")
     print(f"Results saved to {output_file}")
 
 if __name__ == "__main__":

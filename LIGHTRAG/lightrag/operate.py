@@ -719,6 +719,7 @@ async def kg_retrieval(
     relationships_vdb: BaseVectorStorage,
     chunks_vdb: BaseVectorStorage,
     text_chunks_db: BaseKVStorage,
+    docs_db: BaseKVStorage,
     query_param: QueryParam,
     global_config: dict[str, str],
     hashing_kv: BaseKVStorage | None = None,
@@ -763,6 +764,7 @@ async def kg_retrieval(
 
     # Build context
     chunk_list = await _build_retrieval_context(
+        query,
         ll_keywords_str,
         hl_keywords_str,
         knowledge_graph_inst,
@@ -770,6 +772,7 @@ async def kg_retrieval(
         relationships_vdb,
         chunks_vdb,
         text_chunks_db,
+        docs_db,
         query_param,
     )
 
@@ -1180,6 +1183,7 @@ async def _build_query_context(
     return result
 
 async def _build_retrieval_context(
+    raw_query: str,
     ll_keywords: str,
     hl_keywords: str,
     knowledge_graph_inst: BaseGraphStorage,
@@ -1187,6 +1191,7 @@ async def _build_retrieval_context(
     relationships_vdb: BaseVectorStorage,
     chunks_vdb: BaseVectorStorage,
     text_chunks_db: BaseKVStorage,
+    docs_db: BaseKVStorage,
     query_param: QueryParam,
 ):
     if query_param.mode == "local":
@@ -1237,129 +1242,359 @@ async def _build_retrieval_context(
             relation_chunks_mapping,
         ) = hl_data
 
-    async def calculate_scores(query, chunks_mapping, vdb, chunk_db, is_entity=True):
-        # Get query embedding once
-        query_embedding = await vdb.embedding_func([query])
-        query_embedding = query_embedding[0].reshape(1, -1)  # Reshape for sklearn
+    # async def calculate_scores(query, keyword, chunks_mapping, vdb, chunk_db, docs_db, text_chunks_db, is_entity=True):
+    #     # Get query embedding once
+    #     query_embedding = await vdb.embedding_func([query])
+    #     query_embedding = query_embedding[0].reshape(1, -1)  # Reshape for sklearn
+
+    #     key_embedding = await vdb.embedding_func([keyword])
+    #     key_embedding = key_embedding[0].reshape(1, -1)
         
-        # Calculate scores
-        scored_chunks = []
+    #     # Flatten data structure for processing all chunks together
+    #     all_keys = []
+    #     all_chunks = []
+    #     all_chunk_ids = []
+    #     chunk_to_key_map = {}  # Map each chunk to its key
+    #     chunk_index_map = {}   # Track original index of each chunk
         
-        # Process each key in parallel
-        async def process_key(key, chunks):
-            key_results = []
-            print(f"Processing key: {key}")
-            # Get entity/relation embedding from database
-            item_embedding = None
+    #     # Collect all data in flat structures
+    #     for key, chunks in chunks_mapping.items():
+    #         for chunk in chunks:
+    #             all_keys.append(key)
+    #             all_chunks.append(chunk)
+    #             chunk_id = compute_mdhash_id(chunk, prefix="chunk-")
+    #             all_chunk_ids.append(chunk_id)
+    #             chunk_to_key_map[chunk] = key
+                
+    #     # Batch load all chunk metadata in one call
+    #     all_chunk_metadata = await asyncio.gather(*[text_chunks_db.get_by_id(chunk_id) for chunk_id in all_chunk_ids])
+        
+    #     # Extract all doc_ids
+    #     all_doc_ids = []
+    #     for metadata in all_chunk_metadata:
+    #         doc_id = metadata.get("full_doc_id") if metadata else None
+    #         all_doc_ids.append(doc_id)
             
+    #     # Batch load all document content
+    #     all_doc_contents = await asyncio.gather(*[
+    #         docs_db.get_by_id(doc_id) if doc_id else None 
+    #         for doc_id in all_doc_ids
+    #     ])
+        
+    #     # Build list of valid chunks and their contents
+    #     valid_chunks = []
+    #     valid_keys = []
+    #     valid_contents = []
+        
+    #     for i, chunk in enumerate(all_chunks):
+    #         doc_content = None
+    #         if all_doc_contents[i] and "content" in all_doc_contents[i]:
+    #             doc_content = all_doc_contents[i]["content"]
+    #         else:
+    #             doc_content = chunk
+                
+    #         if not doc_content:
+    #             continue
+                
+    #         valid_chunks.append(chunk)
+    #         valid_keys.append(all_keys[i])
+    #         valid_contents.append(doc_content)
+            
+    #     if not valid_chunks:
+    #         return []
+            
+    #     # Batch load or calculate all embeddings at once
+        
+    #     # 1. First, get unique keys and their embeddings
+    #     unique_keys = list(set(valid_keys))
+    #     key_embeddings = {}
+        
+    #     for key in unique_keys:
+    #         if is_entity:
+    #             embedding = await vdb.get_entity_embedding(key)
+    #             if embedding is None:
+    #                 print(f"Entity embedding for {key} not found, computing...")
+    #                 embedding = (await vdb.embedding_func([key]))[0]
+    #         else:
+    #             if "----" in key:
+    #                 src_id, tgt_id = key.split("----", 1)
+    #                 embedding = await vdb.get_relation_embedding(src_id, tgt_id)
+    #             else:
+    #                 embedding = None
+                    
+    #             if embedding is None:
+    #                 print(f"Relation embedding for {key} not found, computing...")
+    #                 embedding = (await vdb.embedding_func([key]))[0]
+            
+    #         key_embeddings[key] = embedding
+            
+    #     # 2. Get or compute chunk embeddings
+    #     chunk_embeddings = await asyncio.gather(*[chunk_db.get_chunk_embedding(compute_mdhash_id(chunk, prefix="chunk-")) for chunk in valid_chunks])
+        
+    #     # 3. Compute any missing chunk embeddings
+    #     chunks_to_compute = []
+    #     chunks_to_compute_indices = []
+        
+    #     for i, embedding in enumerate(chunk_embeddings):
+    #         if embedding is None:
+    #             chunks_to_compute.append(valid_chunks[i])
+    #             chunks_to_compute_indices.append(i)
+                
+    #     if chunks_to_compute:
+    #         computed_embeddings = await chunk_db.embedding_func(chunks_to_compute)
+    #         for idx, embedding in zip(chunks_to_compute_indices, computed_embeddings):
+    #             chunk_embeddings[idx] = embedding
+                
+    #     # 4. Build combined matrices for matrix operations
+    #     # Create matrix structure: each row has [key_embedding, chunk_embedding]
+    #     matrix_rows = []
+    #     for i, chunk in enumerate(valid_chunks):
+    #         key = valid_keys[i]
+    #         key_emb = key_embeddings[key]
+    #         chunk_emb = chunk_embeddings[i]
+    #         matrix_rows.append((valid_contents[i], key_emb, chunk_emb))
+            
+    #     # 5. Perform matrix operations
+    #     if matrix_rows:
+    #         # Extract content and embeddings
+    #         contents = [row[0] for row in matrix_rows]
+    #         key_embs = np.array([row[1] for row in matrix_rows])
+    #         chunk_embs = np.array([row[2] for row in matrix_rows])
+            
+    #         # Calculate similarities in one batch operation
+    #         key_similarities = sklearn_cosine_similarity(key_embedding, key_embs)[0]
+    #         content_similarities = sklearn_cosine_similarity(query_embedding, chunk_embs)[0]
+            
+    #         # Calculate final scores
+    #         total_scores = 0.4 * key_similarities + 0.6 * content_similarities
+            
+    #         # Create result tuples and convert scores to native Python float for JSON compatibility
+    #         scored_docs = [(content, float(score)) for content, score in zip(contents, total_scores)]
+            
+    #         # Sort by scores
+    #         scored_docs.sort(key=lambda x: x[1], reverse=True)
+    #         return scored_docs
+            
+    #     return []
+    
+    
+    
+    async def calculate_scores(query, keyword, chunks_mapping, vdb, chunk_db, docs_db, text_chunks_db, is_entity=True):
+        import time
+        import logging
+        
+        # Thiết lập logging
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger("performance_log")
+        
+        # Hàm tiện ích để ghi nhận thời gian
+        def log_time(start_time, step_name):
+            elapsed = time.time() - start_time
+            logger.info(f"THỜI GIAN - {step_name}: {elapsed:.4f} giây")
+            return time.time()
+        
+        total_start = time.time()
+        
+        # 1. Thực hiện embedding query và keyword cùng lúc
+        step_start = time.time()
+        query_embedding, key_embedding = await asyncio.gather(
+            vdb.embedding_func([query]), 
+            vdb.embedding_func([keyword])
+        )
+        query_embedding = query_embedding[0].reshape(1, -1)
+        key_embedding = key_embedding[0].reshape(1, -1)
+        step_start = log_time(step_start, "Embedding query và keyword")
+        
+        # 2. Chuẩn bị dữ liệu
+        all_keys = []
+        all_chunks = []
+        all_chunk_ids = []
+        
+        # Tạo danh sách các chunk_ids trước để batch processing
+        for key, chunks in chunks_mapping.items():
+            for chunk in chunks:
+                all_keys.append(key)
+                all_chunks.append(chunk)
+                chunk_id = compute_mdhash_id(chunk, prefix="chunk-")
+                all_chunk_ids.append(chunk_id)
+        
+        step_start = log_time(step_start, "Chuẩn bị dữ liệu chunks")
+        logger.info(f"Số lượng chunks: {len(all_chunks)}")
+        
+        # 3. Tối ưu hóa bằng cách gom nhóm các truy vấn database
+        # Lấy metadata chunks và embeddings cùng lúc
+        step_start = time.time()
+        chunk_metadata_task = asyncio.gather(*[text_chunks_db.get_by_id(chunk_id) for chunk_id in all_chunk_ids])
+        chunk_embeddings_task = asyncio.gather(*[chunk_db.get_chunk_embedding(chunk_id) for chunk_id in all_chunk_ids])
+        
+        all_chunk_metadata, initial_chunk_embeddings = await asyncio.gather(chunk_metadata_task, chunk_embeddings_task)
+        step_start = log_time(step_start, "Lấy metadata và embeddings của chunks")
+        
+        # 4. Trích xuất doc_ids và batch load tất cả document contents
+        step_start = time.time()
+        all_doc_ids = [metadata.get("full_doc_id") if metadata else None for metadata in all_chunk_metadata]
+        all_doc_contents = await asyncio.gather(*[
+            docs_db.get_by_id(doc_id) if doc_id else None 
+            for doc_id in all_doc_ids
+        ])
+        step_start = log_time(step_start, "Lấy nội dung documents")
+        
+        # 5. Chuẩn bị dữ liệu hợp lệ và xác định chunk embeddings nào cần tính toán
+        step_start = time.time()
+        valid_chunks = []
+        valid_keys = []
+        valid_contents = []
+        valid_chunk_embeddings = []
+        chunks_to_compute = []
+        chunks_to_compute_indices = []
+        
+        for i, chunk in enumerate(all_chunks):
+            # Lấy nội dung
+            doc_content = all_doc_contents[i].get("content", chunk) if all_doc_contents[i] else chunk
+            if not doc_content:
+                continue
+                
+            valid_chunks.append(chunk)
+            valid_keys.append(all_keys[i])
+            valid_contents.append(doc_content)
+            
+            # Kiểm tra embedding
+            if initial_chunk_embeddings[i] is None:
+                chunks_to_compute.append(chunk)
+                chunks_to_compute_indices.append(len(valid_chunk_embeddings))
+            
+            valid_chunk_embeddings.append(initial_chunk_embeddings[i])
+        
+        if not valid_chunks:
+            logger.info(f"Tổng thời gian xử lý: {time.time() - total_start:.4f} giây - Không có chunk hợp lệ")
+            return []
+        
+        logger.info(f"Số lượng chunks hợp lệ: {len(valid_chunks)}")
+        logger.info(f"Số lượng chunks cần tính embedding: {len(chunks_to_compute)}")
+        step_start = log_time(step_start, "Chuẩn bị dữ liệu hợp lệ")
+        
+        # 6. Batch load unique key embeddings
+        step_start = time.time()
+        unique_keys = list(set(valid_keys))
+        key_embedding_tasks = []
+        
+        for key in unique_keys:
             if is_entity:
-                # Try to load entity embedding from database
-                item_embedding = await vdb.get_entity_embedding(key)
-                if item_embedding is None:
-                    print("item_embedding is None")
-                    # Fallback to computing embedding if not found in database
-                    item_embeddings = await vdb.embedding_func([key])
-                    item_embedding = item_embeddings[0]
-                else:
-                    print("found item_embedding in database")
+                task = vdb.get_entity_embedding(key)
             else:
-                # Try to extract source and target entities for relation
                 if "----" in key:
                     src_id, tgt_id = key.split("----", 1)
-                    item_embedding = await vdb.get_relation_embedding(src_id, tgt_id)
-
-                # Fallback to computing embedding if not found
-                if item_embedding is None:
-                    print("item_embedding is None")
-                    item_embeddings = await vdb.embedding_func([key])
-                    item_embedding = item_embeddings[0]
+                    task = vdb.get_relation_embedding(src_id, tgt_id)
                 else:
-                    print("found src_id and tgt_id")
-            # Reshape for sklearn
-            item_embedding = item_embedding.reshape(1, -1)
-            item_similarity = sklearn_cosine_similarity(query_embedding, item_embedding)[0][0]
-            
-            # Batch process all chunks for this key
-            # 1. Create chunk IDs for database lookup
-            chunk_ids = [compute_mdhash_id(chunk, prefix="chunk-") for chunk in chunks]
-            
-            # 2. Load all chunk embeddings from database in parallel
-            chunk_embeddings = await asyncio.gather(*[chunk_db.get_chunk_embedding(chunk_id) for chunk_id in chunk_ids])
-            
-            # 3. Identify chunks that need embedding computation
-            chunks_to_compute = []
-            for i, embedding in enumerate(chunk_embeddings):
-                if embedding is None:
-                    chunks_to_compute.append((i, chunks[i]))
-            
-            # 4. Compute missing embeddings in batch
-            computed_embeddings = {}
-            if chunks_to_compute:
-                compute_chunks = [chunk for _, chunk in chunks_to_compute]
-                batch_embeddings = await chunk_db.embedding_func(compute_chunks)
-                
-                for (idx, _), embedding in zip(chunks_to_compute, batch_embeddings):
-                    computed_embeddings[idx] = embedding
-            
-            # 5. Calculate similarity scores for all chunks
-            for i, chunk in enumerate(chunks):
-                # Get embedding from either database or computed
-                chunk_embedding = chunk_embeddings[i]
-                if chunk_embedding is None:
-                    chunk_embedding = computed_embeddings[i]
-                
-                # Reshape for sklearn
-                chunk_embedding = chunk_embedding.reshape(1, -1)
-                content_similarity = sklearn_cosine_similarity(query_embedding, chunk_embedding)[0][0]
-                
-                # Calculate total score (without position score)
-                total_score = 0.4 * item_similarity + 0.6 * content_similarity
-                key_results.append((chunk, total_score))
-            
-            return key_results
+                    task = None
+            key_embedding_tasks.append(task)
         
-        # Process all keys in parallel
-        key_tasks = []
-        for key, chunks in chunks_mapping.items():
-            key_tasks.append(process_key(key, chunks))
+        key_embedding_results = await asyncio.gather(*key_embedding_tasks)
+        step_start = log_time(step_start, "Lấy embeddings cho keys")
         
-        # Gather all results
-        all_key_results = await asyncio.gather(*key_tasks)
+        # 7. Tính toán các embeddings còn thiếu
+        step_start = time.time()
+        missing_key_indices = [i for i, emb in enumerate(key_embedding_results) if emb is None]
+        keys_to_compute = [unique_keys[i] for i in missing_key_indices]
         
-        # Flatten results
-        for key_result in all_key_results:
-            scored_chunks.extend(key_result)
+        if keys_to_compute:
+            logger.info(f"Số lượng keys cần tính embedding: {len(keys_to_compute)}")
+            computed_key_embeddings = await vdb.embedding_func(keys_to_compute)
+            for i, embedding in zip(missing_key_indices, computed_key_embeddings):
+                key_embedding_results[i] = embedding
         
-        # Sort all chunks by score
-        scored_chunks.sort(key=lambda x: x[1], reverse=True)
-        return scored_chunks
-
-    print("da den day chua")
-
-    ll_scored_chunks = []
-    hl_scored_chunks = []
+        # Lưu kết quả vào dictionary để truy cập nhanh
+        key_embeddings = {unique_keys[i]: emb for i, emb in enumerate(key_embedding_results)}
+        step_start = log_time(step_start, "Tính toán embeddings thiếu cho keys")
+        
+        # 8. Tính toán chunk embeddings còn thiếu
+        step_start = time.time()
+        if chunks_to_compute:
+            computed_embeddings = await chunk_db.embedding_func(chunks_to_compute)
+            for idx, embedding in zip(chunks_to_compute_indices, computed_embeddings):
+                valid_chunk_embeddings[idx] = embedding
+        step_start = log_time(step_start, "Tính toán embeddings thiếu cho chunks")
+        
+        # 9. Chuẩn bị ma trận cho vector operations
+        step_start = time.time() 
+        if valid_chunks:
+            # Chuyển đổi dữ liệu thành numpy arrays
+            key_embs = np.array([key_embeddings[key] for key in valid_keys])
+            chunk_embs = np.array(valid_chunk_embeddings)
+            
+            # Tính toán similarities cùng lúc
+            key_similarities = sklearn_cosine_similarity(key_embedding, key_embs)[0]
+            content_similarities = sklearn_cosine_similarity(query_embedding, chunk_embs)[0]
+            
+            # Sử dụng numpy để tính toán tổng điểm
+            total_scores = 0.4 * key_similarities + 0.6 * content_similarities
+            
+            # Tạo kết quả và sắp xếp
+            scored_docs = [(content, float(score)) for content, score in zip(valid_contents, total_scores)]
+            result = sorted(scored_docs, key=lambda x: x[1], reverse=True)
+            
+            step_start = log_time(step_start, "Tính toán similarity và sắp xếp kết quả")
+            log_time(total_start, "TỔNG THỜI GIAN XỬ LÝ")
+            
+            return result
+        
+        log_time(total_start, "TỔNG THỜI GIAN XỬ LÝ")
+        return []
     
-    if query_param.mode == "local" or query_param.mode == "hybrid":
-        # Tính điểm cho low-level chunks (entities)
+    ll_scored_chunks, hl_scored_chunks = [], []
+    
+    if query_param.mode == "hybrid":
+        # Chạy cả hai tác vụ song song trong chế độ hybrid
+        ll_task, hl_task = await asyncio.gather(
+            calculate_scores(
+                query=raw_query,
+                keyword=ll_keywords,
+                chunks_mapping=entity_chunks_mapping, 
+                vdb=entities_vdb, 
+                chunk_db=chunks_vdb,
+                docs_db=docs_db,
+                text_chunks_db=text_chunks_db,
+                is_entity=True
+            ),
+            calculate_scores(
+                query=raw_query,
+                keyword=hl_keywords,
+                chunks_mapping=relation_chunks_mapping, 
+                vdb=relationships_vdb, 
+                chunk_db=chunks_vdb,
+                docs_db=docs_db,
+                text_chunks_db=text_chunks_db,
+                is_entity=False
+            )
+        )
+        ll_scored_chunks, hl_scored_chunks = ll_task, hl_task
+    elif query_param.mode == "local":
         ll_scored_chunks = await calculate_scores(
-            query=ll_keywords,
+            query=raw_query,
+            keyword=ll_keywords,
             chunks_mapping=entity_chunks_mapping, 
             vdb=entities_vdb, 
             chunk_db=chunks_vdb,
+            docs_db=docs_db,
+            text_chunks_db=text_chunks_db,
             is_entity=True
         )
-    # print("chac la den day roi")
-    if query_param.mode == "global" or query_param.mode == "hybrid":
-        # Tính điểm cho high-level chunks (relations)
+    elif query_param.mode == "global":
         hl_scored_chunks = await calculate_scores(
-            query=hl_keywords,
+            query=raw_query,
+            keyword=hl_keywords,
             chunks_mapping=relation_chunks_mapping, 
             vdb=relationships_vdb, 
             chunk_db=chunks_vdb,
+            docs_db=docs_db,
+            text_chunks_db=text_chunks_db,
             is_entity=False
         )
-    # print("den day di pls")
+    
     return (ll_scored_chunks, hl_scored_chunks)
+    
+
+
 
 async def _get_node_data(
     query: str,
@@ -1418,7 +1653,7 @@ async def _get_node_data(
         
         # Thêm vào mapping nếu có chunks
         if entity_chunks:
-            entity_chunks_mapping[entity_name] = entity_chunks[:6]
+            entity_chunks_mapping[entity_name] = entity_chunks[:10]
             
     len_node_datas = len(node_datas)
     node_datas = truncate_list_by_token_size(
@@ -1696,7 +1931,7 @@ async def _get_edge_data(
         
         # Thêm vào mapping nếu có chunks
         if relation_chunks:
-            relation_chunks_mapping[relation_key] = relation_chunks[:6]
+            relation_chunks_mapping[relation_key] = relation_chunks[:10]
 
     logger.info(
         f"Global query uses {len(use_entities)} entites, {len(edge_datas)} relations, {len(use_text_units)} chunks"

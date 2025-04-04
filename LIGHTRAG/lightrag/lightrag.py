@@ -2108,6 +2108,8 @@ class LightRAG:
                 self.relationships_vdb,
                 self.chunks_vdb,
                 self.text_chunks,
+                self.full_docs,
+                
                 param,
                 asdict(self),
                 hashing_kv=self.llm_response_cache
