@@ -778,6 +778,41 @@ async def kg_retrieval(
 
     return chunk_list
 
+async def naive_retrieval(query: str,
+                          query_param: QueryParam,
+                          global_config: dict[str, str],
+                          chunks_vdb: BaseVectorStorage,
+                          text_chunks_db: BaseKVStorage):
+
+    language = global_config["addon_params"].get(
+        "language", PROMPTS["DEFAULT_LANGUAGE"]
+    )
+    results = await chunks_vdb.query(query, top_k=query_param.top_k)
+    if not len(results):
+        return get_prompt("fail_response", language)
+
+    chunks_ids = [r["id"] for r in results]
+    chunks_distance = [float(r["distance"]) for r in results]
+    chunks = await text_chunks_db.get_by_ids(chunks_ids)
+
+
+    # Filter out invalid chunks
+    valid_chunks = [
+        chunk for chunk in chunks if chunk is not None and "content" in chunk
+    ]
+
+    valid_chunks = [chunk["content"] for chunk in valid_chunks]
+
+    if not valid_chunks:
+        logger.warning("No valid chunks found after filtering")
+        return get_prompt("fail_response", language)
+
+    chunk_scores_dict = {}
+    for i in range(len(valid_chunks)):
+        chunk_scores_dict[valid_chunks[i]] = chunks_distance[i]
+
+    return chunk_scores_dict
+
 
 async def extract_keywords_only(
     text: str,
@@ -1397,10 +1432,12 @@ async def _build_retrieval_context(
         
         # 1. Thực hiện embedding query và keyword cùng lúc
         step_start = time.time()
-        query_embedding, key_embedding = await asyncio.gather(
-            vdb.embedding_func([query]), 
-            vdb.embedding_func([keyword])
-        )
+        query_embedding = await vdb.embedding_func([query])
+        key_embedding = await vdb.embedding_func([keyword])
+        # query_embedding, key_embedding = await asyncio.gather(
+        #     vdb.embedding_func([query]), 
+        #     vdb.embedding_func([keyword])
+        # )
         query_embedding = query_embedding[0].reshape(1, -1)
         key_embedding = key_embedding[0].reshape(1, -1)
         step_start = log_time(step_start, "Embedding query và keyword")
@@ -1893,9 +1930,10 @@ async def _get_edge_data(
         for k, v, d in zip(results, edge_datas, edge_degree)
         if v is not None
     ]
-    edge_datas = sorted(
-        edge_datas, key=lambda x: (x["rank"], x["weight"]), reverse=True
-    )
+    # edge_datas = sorted(
+    #     edge_datas, key=lambda x: (x["rank"], x["weight"]), reverse=True
+    # )
+    print("no_sort")
     len_edge_datas = len(edge_datas)
     edge_datas = truncate_list_by_token_size(
         edge_datas,

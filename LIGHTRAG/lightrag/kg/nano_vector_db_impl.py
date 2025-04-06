@@ -69,7 +69,8 @@ class NanoVectorDBStorage(BaseVectorStorage):
             contents[i : i + self._max_batch_size]
             for i in range(0, len(contents), self._max_batch_size)
         ]
-
+        # save batch ra ngoai
+        
         embedding_tasks = [self.embedding_func(batch) for batch in batches]
         embeddings_list = await asyncio.gather(*embedding_tasks)
 
@@ -287,6 +288,7 @@ class NanoVectorDBStorage(BaseVectorStorage):
             logger.error(f"Error getting embedding for relation between {src_id} and {tgt_id}: {e}")
         
         return None
+
 
     async def get_chunk_embedding(self, chunk_id: str) -> np.ndarray | None:
         """Get embedding vector for a text chunk

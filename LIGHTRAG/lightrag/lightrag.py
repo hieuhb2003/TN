@@ -6,7 +6,7 @@ import configparser
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import partial
-from typing import Any, AsyncIterator, Callable, Iterator, cast, List, Tuple, Optional
+from typing import Any, AsyncIterator, Callable, Iterator, cast
 from sklearn.metrics.pairwise import cosine_similarity  
 import numpy as np        
 import re
@@ -32,7 +32,8 @@ from .operate import (
     naive_query,
     kg_retrieval,
     _merge_nodes_then_upsert,
-    _merge_edges_then_upsert
+    _merge_edges_then_upsert,
+    naive_retrieval
 )
 
 
@@ -47,6 +48,7 @@ from .utils import (
     detect_language,
 )
 from .types import KnowledgeGraph
+import time
 
 config = configparser.ConfigParser()
 config.read("config.ini", "utf-8")
@@ -233,6 +235,20 @@ def always_get_an_event_loop() -> asyncio.AbstractEventLoop:
         asyncio.set_event_loop(new_loop)
         return new_loop
 
+def check_exist_embedding_func(embedding_func_name, working_dir):
+    all_file_in_working_dirs = os.listdir(working_dir)
+    entities_vdb_path = "vdb_" + NameSpace.VECTOR_STORE_ENTITIES + "_" + embedding_func_name + ".json"
+    relationships_vdb_path = "vdb_" + NameSpace.VECTOR_STORE_RELATIONSHIPS+ "_" + embedding_func_name + ".json"
+    chunks_vdb_path = "vdb_" + NameSpace.VECTOR_STORE_CHUNKS + "_" + embedding_func_name + ".json"
+
+    if entities_vdb_path in all_file_in_working_dirs \
+            and relationships_vdb_path in all_file_in_working_dirs \
+            and chunks_vdb_path in all_file_in_working_dirs:
+
+        return True
+    return False
+
+
 
 @dataclass
 class LightRAG:
@@ -250,6 +266,8 @@ class LightRAG:
             "use_llm_check": False,
         }
     )
+
+    embedding_func_name : str = field(default = None)
     """Configuration for embedding cache.
     - enabled: If True, enables caching to avoid redundant computations.
     - similarity_threshold: Minimum similarity score to use cached embeddings.
@@ -515,26 +533,51 @@ class LightRAG:
             embedding_func=self.embedding_func,
         )
 
-        self.entities_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
+        if self.embedding_func_name and check_exist_embedding_func(self.embedding_func_name, self.working_dir):
+            
+            self.entities_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
             namespace=make_namespace(
-                self.namespace_prefix, NameSpace.VECTOR_STORE_ENTITIES
+                self.namespace_prefix, NameSpace.VECTOR_STORE_ENTITIES + "_" + self.embedding_func_name
             ),
             embedding_func=self.embedding_func,
             meta_fields={"entity_name"},
         )
-        self.relationships_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
-            namespace=make_namespace(
-                self.namespace_prefix, NameSpace.VECTOR_STORE_RELATIONSHIPS
-            ),
-            embedding_func=self.embedding_func,
-            meta_fields={"src_id", "tgt_id"},
-        )
-        self.chunks_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
-            namespace=make_namespace(
-                self.namespace_prefix, NameSpace.VECTOR_STORE_CHUNKS
-            ),
-            embedding_func=self.embedding_func,
-        )
+            self.relationships_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
+                namespace=make_namespace(
+                    self.namespace_prefix, NameSpace.VECTOR_STORE_RELATIONSHIPS+ "_" + self.embedding_func_name
+                ),
+                embedding_func=self.embedding_func,
+                meta_fields={"src_id", "tgt_id"},
+            )
+            self.chunks_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
+                namespace=make_namespace(
+                    self.namespace_prefix, NameSpace.VECTOR_STORE_CHUNKS+ "_" + self.embedding_func_name
+                ),
+                embedding_func=self.embedding_func,
+            )
+
+        else:
+
+            self.entities_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
+                namespace=make_namespace(
+                    self.namespace_prefix, NameSpace.VECTOR_STORE_ENTITIES
+                ),
+                embedding_func=self.embedding_func,
+                meta_fields={"entity_name"},
+            )
+            self.relationships_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
+                namespace=make_namespace(
+                    self.namespace_prefix, NameSpace.VECTOR_STORE_RELATIONSHIPS
+                ),
+                embedding_func=self.embedding_func,
+                meta_fields={"src_id", "tgt_id"},
+            )
+            self.chunks_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
+                namespace=make_namespace(
+                    self.namespace_prefix, NameSpace.VECTOR_STORE_CHUNKS
+                ),
+                embedding_func=self.embedding_func,
+            )
 
         # Initialize document status storage
         self.doc_status: DocStatusStorage = self.doc_status_storage_cls(
@@ -830,6 +873,7 @@ class LightRAG:
     #     from tqdm import tqdm
 
     #     for batch_idx, docs_batch in tqdm(enumerate(docs_batches), desc="Processing batches", total=len(docs_batches)):
+  
     #         # 4. iterate over batch
     #         for doc_id_processing_status in docs_batch:
     #             doc_id, status_doc = doc_id_processing_status
@@ -904,7 +948,6 @@ class LightRAG:
     #                 )
     #                 continue
     #         logger.info(f"Completed batch {batch_idx + 1} of {len(docs_batches)}.")
-
 
     async def apipeline_enqueue_documents(self, input: str | list[str]) -> None:
         """
@@ -1035,7 +1078,9 @@ class LightRAG:
             # 4. Process all chunks in parallel
             try:
                 # Upload all chunks to vector database
-                await self.chunks_vdb.upsert(all_chunks)
+                await self.chunks_vdb.upsert(all_chunks)  
+                #  log upsert time
+                
                 
                 # Process all entity-relation graphs in parallel
                 await self._process_entity_relation_graph(all_chunks)
@@ -1088,8 +1133,6 @@ class LightRAG:
                     }
                 
                 await self.doc_status.upsert(failure_updates)
-
-
 
     async def _process_entity_relation_graph(self, chunk: dict[str, Any]) -> None:
         try:
@@ -2124,11 +2167,18 @@ class LightRAG:
                 ),
                 system_prompt=system_prompt,
             )
+        elif param.mode == "naive":
+            response = await naive_retrieval(
+                query,
+                param,
+                asdict(self),
+                self.chunks_vdb,
+                self.text_chunks
+            )
         else:
             raise ValueError(f"Unsupport mode {param.mode}")
         await self._query_done()
         return response
-
 
     def query_with_separate_keyword_extraction(
         self, query: str, prompt: str, param: QueryParam = QueryParam()
@@ -3216,9 +3266,9 @@ class LightRAG:
             # Prepare data
             if entity_name not in nodes_data_map:
                 nodes_data_map[entity_name] = []
+            print("Extracted entity: ", entity["type"].upper())
             if entity["type"].lower() not in PROMPTS["DEFAULT_ENTITY_TYPES"] + PROMPTS["DEFAULT_ENTITY_TYPES_VI"]:
                 entity["type"] = "UNKNOWN"
-                            
             nodes_data_map[entity_name].append({
                 "entity_type": f'"{entity["type"].upper()}"',
                 "description": entity["description"],
@@ -3558,7 +3608,7 @@ class LightRAG:
                     entity_type = entity_parts[1].split('Type:')[1].strip() if 'Type:' in entity_parts[1] else entity_parts[1].strip()
                     entity_desc = entity_parts[2].split('Description:')[1].strip() if 'Description:' in entity_parts[2] else entity_parts[2].strip()
                     if entity_type.lower() not in PROMPTS["DEFAULT_ENTITY_TYPES"] + PROMPTS["DEFAULT_ENTITY_TYPES_VI"]:
-                        entity_type = "UNKNOWN"                    
+                        entity_type = "UNKNOWN"
                     translated_entities.append({
                         "name": entity_name,
                         "type": entity_type,
@@ -4211,97 +4261,115 @@ class LightRAG:
             
         logger.info(f"Created {len(original_entities)} cross-lingual edges between {source_language} and {target_language} entities")
 
-    async def ainsert_duo_batch(
-        self,
-        document_pairs: List[List[str, Optional[str]]],
-        source_language: str = "Vietnamese",
-        target_language: str = "English",
-        store_translations: bool = True,
-        translation_db_path: Optional[str] = None,
-        batch_size: int = 5
-    ) -> List[List[str, str]]:
-        """
-        Batch insert multiple document pairs in their original and translated versions.
-        Processes documents in parallel batches for better performance.
-        
-        Args:
-            document_pairs: List of tuples (original_text, translated_text)
-            source_language: Source language (default: "Vietnamese")
-            target_language: Target language (default: "English")
-            store_translations: Whether to store entity and relation translations
-            translation_db_path: Path to store translation mappings
-            batch_size: Number of documents to process in parallel (default: 5)
-        
-        Returns:
-            List of tuples (original_doc_id, translated_doc_id) for each processed pair
-        """
-        if translation_db_path is None:
-            translation_db_path = os.path.join(self.working_dir, "translations.json")
-        
-        logger.info(f"Starting batch duo insertion: {len(document_pairs)} pairs")
-        
-        # Process documents in batches
-        results = []
-        for i in range(0, len(document_pairs), batch_size):
-            batch = document_pairs[i:i + batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1} of {(len(document_pairs) + batch_size - 1)//batch_size}")
-            
-            # Create tasks for each document pair in the batch
-            batch_tasks = []
-            for orig_text, trans_text in batch:
-                # Skip if either text is empty
-                if not orig_text or not trans_text:
-                    logger.warning("Skipping empty document pair")
-                    continue
-                    
-                # Create task for this document pair
-                task = self.ainsert_duo(
-                    data_original=orig_text,
-                    data_translated=trans_text,
-                    source_language=source_language,
-                    target_language=target_language,
-                    store_translations=store_translations,
-                    translation_db_path=translation_db_path
-                )
-                batch_tasks.append(task)
-            
-            # Process all tasks in the batch in parallel
-            if batch_tasks:
-                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-                
-                # Handle results and any exceptions
-                for result in batch_results:
-                    if isinstance(result, Exception):
-                        logger.error(f"Error processing document pair: {str(result)}")
-                        continue
-                    results.append(result)
-        
-        logger.info(f"Completed batch duo insertion: {len(results)} pairs processed")
-        return results
 
-    def insert_duo_batch(
-        self,
-        document_pairs: List[List[str, Optional[str]]],
-        source_language: str = "Vietnamese",
-        target_language: str = "English",
-        store_translations: bool = True,
-        translation_db_path: Optional[str] = None,
-        batch_size: int = 5
-    ) -> List[Tuple[str, str]]:
-        """
-        Synchronous version of ainsert_duo_batch.
-        """
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(
-            self.ainsert_duo_batch(
-                document_pairs=document_pairs,
-                source_language=source_language,
-                target_language=target_language,
-                store_translations=store_translations,
-                translation_db_path=translation_db_path,
-                batch_size=batch_size
-            )
+    def get_graphs(self):
+        return self.chunk_entity_relation_graph
+
+
+    def create_db_with_new_embedding(self, embedding_func, embedding_name):
+        loop = always_get_an_event_loop()
+        loop.run_until_complete(
+            self.a_create_db_with_new_embedding(embedding_func, embedding_name)
         )
+
+    async def a_create_db_with_new_embedding(self,
+                                     embedding_func,
+                                     embedding_name):
+        
+        # create db for entities, relationships and chunks:
+        entities_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
+            namespace=make_namespace(
+                self.namespace_prefix, NameSpace.VECTOR_STORE_ENTITIES + "_" + embedding_name
+            ),
+            embedding_func=embedding_func,
+            meta_fields={"entity_name"},
+        )
+
+        relationships_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
+            namespace=make_namespace(
+                self.namespace_prefix, NameSpace.VECTOR_STORE_RELATIONSHIPS + "_" + embedding_name
+            ),
+            embedding_func=embedding_func,
+            meta_fields={"src_id", "tgt_id"},
+        )
+
+        chunks_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
+            namespace=make_namespace(
+                self.namespace_prefix, NameSpace.VECTOR_STORE_CHUNKS + "_" + embedding_name
+            ),
+            embedding_func=embedding_func,
+        )
+
+        # Intialize the database:
+        tasks = []
+
+        for storage in (
+                entities_vdb,
+                relationships_vdb,
+                chunks_vdb,
+            ):
+                if storage:
+                    tasks.append(storage.initialize())
+
+        await asyncio.gather(*tasks)
+
+        # Take the data from entities, relationships and chunks to upsert
+        nodes = list(self.chunk_entity_relation_graph._graph.nodes(data = True))
+        all_entities_data = []
+        for entity_name, node_data in nodes:
+            new_node_data = {"entity_name" : entity_name, **node_data}
+            all_entities_data.append(new_node_data)
+
+        data_for_vdb = {
+            compute_mdhash_id(dp["entity_name"], prefix="ent-"): {
+                "content": dp["entity_name"] + dp["description"],
+                "entity_name": dp["entity_name"],
+            }
+            for dp in all_entities_data
+        }
+        await entities_vdb.upsert(data_for_vdb)
+
+        ## Take the edges data:
+        edges = list(self.chunk_entity_relation_graph._graph.edges(data = True))
+        all_relationships_data = []
+        for src_id, tgt_id, edge_data in edges:
+            new_edge_data = {"src_id" : src_id, "tgt_id" : tgt_id, **edge_data}
+            all_relationships_data.append(new_edge_data)
+        data_for_vdb = {
+            compute_mdhash_id(dp["src_id"] + dp["tgt_id"], prefix="rel-"): {
+                "src_id": dp["src_id"],
+                "tgt_id": dp["tgt_id"],
+                "content": dp["keywords"]
+                + dp["src_id"]
+                + dp["tgt_id"]
+                + dp["description"],
+                "metadata": {
+                    "created_at": dp.get("metadata", {}).get("created_at", time.time())
+                },
+            }
+            for dp in all_relationships_data
+        }
+        await relationships_vdb.upsert(data_for_vdb)
+
+
+        # get chunks data:
+        chunks_data = self.text_chunks._data
+        await chunks_vdb.upsert(chunks_data)
+
+
+        # finalize the database
+
+        tasks = [
+            storage_inst.index_done_callback()
+            for storage_inst in [  # type: ignore
+                entities_vdb,
+                relationships_vdb,
+                chunks_vdb,
+            ]
+            if storage_inst is not None
+        ]
+        await asyncio.gather(*tasks)
+
+
+        print("Add new embedding sucessfully")
+
