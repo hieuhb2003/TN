@@ -179,3 +179,19 @@ class NetworkXStorage(BaseGraphStorage):
         self, node_label: str, max_depth: int = 5
     ) -> KnowledgeGraph:
         raise NotImplementedError
+
+    async def get_all_nodes(self) -> dict[str, dict[str, Any]]:
+        """Get all nodes with their data from the graph
+        
+        Returns:
+            dict[str, dict[str, Any]]: Dictionary mapping node IDs to node data
+        """
+        return {node_id: data for node_id, data in self._graph.nodes(data=True)}
+        
+    async def get_all_edges(self) -> list[tuple[str, str, dict[str, Any]]]:
+        """Get all edges with their data from the graph
+        
+        Returns:
+            list[tuple[str, str, dict[str, Any]]]: List of (source, target, data) tuples
+        """
+        return [(src, tgt, data) for src, tgt, data in self._graph.edges(data=True)]

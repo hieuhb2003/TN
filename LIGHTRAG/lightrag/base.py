@@ -208,6 +208,14 @@ class BaseGraphStorage(StorageNameSpace, ABC):
     ) -> KnowledgeGraph:
         """Retrieve a subgraph of the knowledge graph starting from a given node."""
 
+    @abstractmethod
+    async def get_all_nodes(self) -> dict[str, dict[str, Any]]:
+        """Get all nodes with their data from the graph."""
+
+    @abstractmethod
+    async def get_all_edges(self) -> list[tuple[str, str, dict[str, Any]]]:
+        """Get all edges with their data from the graph."""
+
 
 class DocStatus(str, Enum):
     """Document processing status"""

@@ -334,3 +334,61 @@ Nếu ông không truyền vào hoặc truyền tên mà không có file vector 
 ### raw data Label train embedding
 
 /home/hungpv/projects/TN/data/raw_label_data
+
+## Decoupled Graph Building and Vector DB Embedding
+
+LightRAG now supports decoupling the graph building process from the vector database embedding. This is particularly useful when:
+
+- You need to build a large graph but want to save the intermediate results before embedding
+- You want to use the same graph with different embedding models
+- Your embedding operation is computationally expensive and you want to run it separately
+
+The workflow consists of two steps:
+
+### Step 1: Build and serialize the graph without embedding
+
+```python
+from lightrag import LightRAG
+
+# Create LightRAG instance with your embedding and LLM functions
+rag = LightRAG(
+    working_dir="./my_graph_data",
+    embedding_func=my_embedding_func,
+    llm_model_func=my_llm_func
+)
+
+# Build the graph without embedding to vector DB
+rag.build_graph_only_sync(my_document_text)
+```
+
+### Step 2: Load the graph and embed it with different models
+
+```python
+# Later, you can load the graph and embed it with different models
+rag.load_graph_and_embed_sync(embedding_func=bge_embedding_func, embedding_name="bge")
+
+# You can use the same graph with another embedding model
+rag.load_graph_and_embed_sync(embedding_func=openai_embedding_func, embedding_name="openai")
+```
+
+### Full Example
+
+For a complete example, see the `decoupled_embedding_example.py` file in the repository.
+
+### Using Different Embeddings for Retrieval
+
+Once you've created multiple embeddings, you can specify which embedding to use when initializing LightRAG:
+
+```python
+# Use the BGE embeddings
+rag = LightRAG(
+    working_dir="./my_graph_data",
+    embedding_func=bge_embedding_func,
+    embedding_func_name="bge"
+)
+
+# Query with BGE embeddings
+results = rag.retrieval(query, param=QueryParam(mode="hybrid"))
+```
+
+This feature offers greater flexibility in how you build and use your knowledge graphs, allowing for more efficient workflows with large datasets.

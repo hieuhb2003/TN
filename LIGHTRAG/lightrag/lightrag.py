@@ -33,7 +33,8 @@ from .operate import (
     kg_retrieval,
     _merge_nodes_then_upsert,
     _merge_edges_then_upsert,
-    naive_retrieval
+    naive_retrieval,
+    save_data_to_json_files,
 )
 
 
@@ -397,6 +398,11 @@ class LightRAG:
         list[dict[str, Any]],
     ] = chunking_by_token_size
 
+    @property
+    def global_config(self):
+        """Return the current configuration as a dictionary."""
+        return asdict(self)
+
     def verify_storage_implementation(
         self, storage_type: str, storage_name: str
     ) -> None:
@@ -694,6 +700,7 @@ class LightRAG:
         language: str = "Vietnamese" ,
         matching_method: str = "hybrid",
         need_cross_language: bool = True,
+        delay_vector_db_update: bool = False,
     ) -> None:
         """Sync Insert documents with checkpoint support
 
@@ -702,13 +709,15 @@ class LightRAG:
             split_by_character: if split_by_character is not None, split the string by character, if chunk longer than
             split_by_character_only: if split_by_character_only is True, split the string by character only, when
             split_by_character is None, this parameter is ignored.
+            delay_vector_db_update: if True, create the graph first and then update the vector databases later
         """
         self.addon_params["current_language"] = language
         self.addon_params["matching_method"] = matching_method
         self.addon_params["need_cross_language"] = need_cross_language
+        self.addon_params["delay_vector_db_update"] = delay_vector_db_update
         loop = always_get_an_event_loop()
         loop.run_until_complete(
-            self.ainsert(input, split_by_character, split_by_character_only, language, matching_method)
+            self.ainsert(input, split_by_character, split_by_character_only, language, matching_method, delay_vector_db_update)
         )
 
     async def ainsert(
@@ -717,7 +726,8 @@ class LightRAG:
         split_by_character: str | None = None,
         split_by_character_only: bool = False,
         language: str = "Vietnamese" , # Add language parameter
-        matching_method: str = "hybrid"
+        matching_method: str = "hybrid",
+        delay_vector_db_update: bool = False,
     ) -> None:
         """Async Insert documents with checkpoint support
 
@@ -726,22 +736,25 @@ class LightRAG:
             split_by_character: if split_by_character is not None, split the string by character, if chunk longer than
             split_by_character_only: if split_by_character_only is True, split the string by character only, when
             split_by_character is None, this parameter is ignored.
+            delay_vector_db_update: if True, create the graph first and then update the vector databases later
         """
         self.addon_params["current_language"] = language
         self.addon_params["matching_method"] = matching_method
-        
+        self.addon_params["delay_vector_db_update"] = delay_vector_db_update
+        print(self.addon_params)
         await self.apipeline_enqueue_documents(input)
         await self.apipeline_process_enqueue_documents(
             split_by_character, split_by_character_only
         )
 
-    def insert_custom_chunks(self, full_text: str, text_chunks: list[str]) -> None:
+    def insert_custom_chunks(self, full_text: str, text_chunks: list[str], delay_vector_db_update: bool = False) -> None:
         loop = always_get_an_event_loop()
-        loop.run_until_complete(self.ainsert_custom_chunks(full_text, text_chunks))
+        loop.run_until_complete(self.ainsert_custom_chunks(full_text, text_chunks, delay_vector_db_update))
 
     async def ainsert_custom_chunks(
-        self, full_text: str, text_chunks: list[str]
+        self, full_text: str, text_chunks: list[str], delay_vector_db_update: bool = False
     ) -> None:
+        self.addon_params["delay_vector_db_update"] = delay_vector_db_update
         update_storage = False
         try:
             doc_key = compute_mdhash_id(full_text.strip(), prefix="doc-")
@@ -775,179 +788,44 @@ class LightRAG:
                 logger.warning("All chunks are already in the storage.")
                 return
 
-            tasks = [
-                self.chunks_vdb.upsert(inserting_chunks),
-                self._process_entity_relation_graph(inserting_chunks),
-                self.full_docs.upsert(new_docs),
-                self.text_chunks.upsert(inserting_chunks),
-            ]
-            await asyncio.gather(*tasks)
+            if delay_vector_db_update:
+                # Process entity-relation graph first
+                entity_data, relationship_data = await self._process_entity_relation_graph_with_delay(inserting_chunks)
+                
+                # Upload only text chunks and full documents
+                tasks = [
+                    self.full_docs.upsert(new_docs),
+                    self.text_chunks.upsert(inserting_chunks),
+                ]
+                await asyncio.gather(*tasks)
+                
+                # Save data to JSON files for later vector DB update
+                working_dir = self.global_config.get("working_dir", os.getcwd())
+                namespace = self.global_config.get("namespace", "default")
+                
+                logger.info(f"Saving all data to JSON files: {len(entity_data)} entities, {len(relationship_data)} relationships, {len(inserting_chunks)} chunks")
+                
+                await save_data_to_json_files(
+                    entities_data=entity_data if entity_data else None,
+                    relationships_data=relationship_data if relationship_data else None,
+                    chunks_data=inserting_chunks,
+                    working_dir=working_dir,
+                    namespace=namespace
+                )
+                logger.info("Data saved to JSON files for later vector DB update")
+            else:
+                # Standard processing - upload to vector database immediately
+                tasks = [
+                    self.chunks_vdb.upsert(inserting_chunks),
+                    self._process_entity_relation_graph(inserting_chunks),
+                    self.full_docs.upsert(new_docs),
+                    self.text_chunks.upsert(inserting_chunks),
+                ]
+                await asyncio.gather(*tasks)
 
         finally:
             if update_storage:
                 await self._insert_done()
-
-    # async def apipeline_enqueue_documents(self, input: str | list[str]) -> None:
-    #     """
-    #     Pipeline for Processing Documents
-
-    #     1. Remove duplicate contents from the list
-    #     2. Generate document IDs and initial status
-    #     3. Filter out already processed documents
-    #     4. Enqueue document in status
-    #     """
-    #     if isinstance(input, str):
-    #         input = [input]
-
-    #     # 1. Remove duplicate contents from the list
-    #     unique_contents = list(set(doc.strip() for doc in input))
-
-    #     # 2. Generate document IDs and initial status
-    #     new_docs: dict[str, Any] = {
-    #         compute_mdhash_id(content, prefix="doc-"): {
-    #             "content": content,
-    #             "content_summary": self._get_content_summary(content),
-    #             "content_length": len(content),
-    #             "status": DocStatus.PENDING,
-    #             "created_at": datetime.now().isoformat(),
-    #             "updated_at": datetime.now().isoformat(),
-    #         }
-    #         for content in unique_contents
-    #     }
-
-    #     # 3. Filter out already processed documents
-    #     # Get docs ids
-    #     all_new_doc_ids = set(new_docs.keys())
-    #     # Exclude IDs of documents that are already in progress
-    #     unique_new_doc_ids = await self.doc_status.filter_keys(all_new_doc_ids)
-    #     # Filter new_docs to only include documents with unique IDs
-    #     new_docs = {doc_id: new_docs[doc_id] for doc_id in unique_new_doc_ids}
-
-    #     if not new_docs:
-    #         logger.info("No new unique documents were found.")
-    #         return
-
-    #     # 4. Store status document
-    #     await self.doc_status.upsert(new_docs)
-    #     logger.info(f"Stored {len(new_docs)} new unique documents")
-
-    # async def apipeline_process_enqueue_documents(
-    #     self,
-    #     split_by_character: str | None = None,
-    #     split_by_character_only: bool = False,
-    # ) -> None:
-    #     """
-    #     Process pending documents by splitting them into chunks, processing
-    #     each chunk for entity and relation extraction, and updating the
-    #     document status.
-
-    #     1. Get all pending, failed, and abnormally terminated processing documents.
-    #     2. Split document content into chunks
-    #     3. Process each chunk for entity and relation extraction
-    #     4. Update the document status
-    #     """
-    #     # 1. Get all pending, failed, and abnormally terminated processing documents.
-    #     to_process_docs: dict[str, DocProcessingStatus] = {}
-
-    #     processing_docs = await self.doc_status.get_docs_by_status(DocStatus.PROCESSING)
-    #     to_process_docs.update(processing_docs)
-    #     failed_docs = await self.doc_status.get_docs_by_status(DocStatus.FAILED)
-    #     to_process_docs.update(failed_docs)
-    #     pendings_docs = await self.doc_status.get_docs_by_status(DocStatus.PENDING)
-    #     to_process_docs.update(pendings_docs)
-
-    #     if not to_process_docs:
-    #         logger.info("All documents have been processed or are duplicates")
-    #         return
-
-    #     # 2. split docs into chunks, insert chunks, update doc status
-    #     batch_size = self.addon_params.get("insert_batch_size", 10)
-    #     docs_batches = [
-    #         list(to_process_docs.items())[i : i + batch_size]
-    #         for i in range(0, len(to_process_docs), batch_size)
-    #     ]
-
-    #     logger.info(f"Number of batches to process: {len(docs_batches)}.")
-
-    #     # 3. iterate over batches
-    #     from tqdm import tqdm
-
-    #     for batch_idx, docs_batch in tqdm(enumerate(docs_batches), desc="Processing batches", total=len(docs_batches)):
-  
-    #         # 4. iterate over batch
-    #         for doc_id_processing_status in docs_batch:
-    #             doc_id, status_doc = doc_id_processing_status
-    #             # Update status in processing
-    #             doc_status_id = compute_mdhash_id(status_doc.content, prefix="doc-")
-    #             await self.doc_status.upsert(
-    #                 {
-    #                     doc_status_id: {
-    #                         "status": DocStatus.PROCESSING,
-    #                         "updated_at": datetime.now().isoformat(),
-    #                         "content": status_doc.content,
-    #                         "content_summary": status_doc.content_summary,
-    #                         "content_length": status_doc.content_length,
-    #                         "created_at": status_doc.created_at,
-    #                     }
-    #                 }
-    #             )
-    #             # Generate chunks from document
-    #             chunks: dict[str, Any] = {
-    #                 compute_mdhash_id(dp["content"], prefix="chunk-"): {
-    #                     **dp,
-    #                     "full_doc_id": doc_id,
-    #                 }
-    #                 for dp in self.chunking_func(
-    #                     status_doc.content,
-    #                     split_by_character,
-    #                     split_by_character_only,
-    #                     self.chunk_overlap_token_size,
-    #                     self.chunk_token_size,
-    #                     self.tiktoken_model_name,
-    #                 )
-    #             }
-
-    #             # Process document (text chunks and full docs) in parallel
-    #             tasks = [
-    #                 self.chunks_vdb.upsert(chunks),
-    #                 self._process_entity_relation_graph(chunks),
-    #                 self.full_docs.upsert({doc_id: {"content": status_doc.content}}),
-    #                 self.text_chunks.upsert(chunks),
-    #             ]
-    #             try:
-    #                 await asyncio.gather(*tasks)
-    #                 await self.doc_status.upsert(
-    #                     {
-    #                         doc_status_id: {
-    #                             "status": DocStatus.PROCESSED,
-    #                             "chunks_count": len(chunks),
-    #                             "content": status_doc.content,
-    #                             "content_summary": status_doc.content_summary,
-    #                             "content_length": status_doc.content_length,
-    #                             "created_at": status_doc.created_at,
-    #                             "updated_at": datetime.now().isoformat(),
-    #                         }
-    #                     }
-    #                 )
-    #                 await self._insert_done()
-
-    #             except Exception as e:
-    #                 logger.error(f"Failed to process document {doc_id}: {str(e)}")
-    #                 await self.doc_status.upsert(
-    #                     {
-    #                         doc_status_id: {
-    #                             "status": DocStatus.FAILED,
-    #                             "error": str(e),
-    #                             "content": status_doc.content,
-    #                             "content_summary": status_doc.content_summary,
-    #                             "content_length": status_doc.content_length,
-    #                             "created_at": status_doc.created_at,
-    #                             "updated_at": datetime.now().isoformat(),
-    #                         }
-    #                     }
-    #                 )
-    #                 continue
-    #         logger.info(f"Completed batch {batch_idx + 1} of {len(docs_batches)}.")
 
     async def apipeline_enqueue_documents(self, input: str | list[str]) -> None:
         """
@@ -1023,10 +901,17 @@ class LightRAG:
             return
 
         batch_size = self.addon_params.get("insert_batch_size", 10)
+        print(len(to_process_docs_full))
         docs_batches = [
             list(to_process_docs_full.items())[i : i + batch_size]
             for i in range(0, len(to_process_docs_full), batch_size)
         ]
+
+        delay_vector_db_update = self.addon_params.get("delay_vector_db_update", False)
+        # Initialize temporary storage for entity and relationship data
+        temp_entity_data = {}
+        temp_relationship_data = {}
+        temp_chunks_data = {}
 
         for to_process_docs in docs_batches:
             logger.info(f"Number of batches to process: {len(docs_batches)}.")
@@ -1077,23 +962,41 @@ class LightRAG:
 
             # 4. Process all chunks in parallel
             try:
-                # Upload all chunks to vector database
-                await self.chunks_vdb.upsert(all_chunks)  
-                #  log upsert time
-                
-                
-                # Process all entity-relation graphs in parallel
-                await self._process_entity_relation_graph(all_chunks)
-                
-                # Upload all full documents
-                full_docs_upload = {
-                    doc_id: {"content": status_doc.content} 
-                    for doc_id, status_doc in to_process_docs
-                }
-                await self.full_docs.upsert(full_docs_upload)
-                
-                # Upload all text chunks
-                await self.text_chunks.upsert(all_chunks)
+                # If delay_vector_db_update is true, only create the entity-relation graph first
+                # and store vector data for later update
+                if delay_vector_db_update:
+                    # Process entity-relation graph first
+                    # _process_entity_relation_graph will now return the entity and relationship data
+                    entity_data, relationship_data = await self._process_entity_relation_graph_with_delay(all_chunks)
+                    # Store data for later vector db update
+                    if entity_data:
+                        temp_entity_data.update(entity_data)
+                    if relationship_data:
+                        temp_relationship_data.update(relationship_data)
+                    if all_chunks:
+                        temp_chunks_data.update(all_chunks)
+                    
+                    # Upload only text chunks and full documents
+                    full_docs_upload = {
+                        doc_id: {"content": status_doc.content} 
+                        for doc_id, status_doc in to_process_docs
+                    }
+                    await self.full_docs.upsert(full_docs_upload)
+                    await self.text_chunks.upsert(all_chunks)
+                else:
+                    # Standard processing - upload to vector database immediately
+                    await self.chunks_vdb.upsert(all_chunks)
+                    await self._process_entity_relation_graph(all_chunks)
+                    
+                    # Upload all full documents
+                    full_docs_upload = {
+                        doc_id: {"content": status_doc.content} 
+                        for doc_id, status_doc in to_process_docs
+                    }
+                    await self.full_docs.upsert(full_docs_upload)
+                    
+                    # Upload all text chunks
+                    await self.text_chunks.upsert(all_chunks)
                 
                 # 5. Update all document statuses to processed
                 success_updates = {}
@@ -1111,7 +1014,8 @@ class LightRAG:
                     }
                 
                 await self.doc_status.upsert(success_updates)
-                await self._insert_done()
+                if not delay_vector_db_update:
+                    await self._insert_done()
                 logger.info(f"Successfully processed {len(success_updates)} documents")
                 
             except Exception as e:
@@ -1133,6 +1037,239 @@ class LightRAG:
                     }
                 
                 await self.doc_status.upsert(failure_updates)
+        
+        # After all batches are processed, if delay_vector_db_update is true,
+        # save all collected data to JSON files instead of updating vector DBs
+        if delay_vector_db_update and (temp_entity_data or temp_relationship_data or temp_chunks_data):
+            logger.info(f"Saving all collected data to JSON files: {len(temp_entity_data)} entities, {len(temp_relationship_data)} relationships, {len(temp_chunks_data)} chunks")
+            
+            from lightrag.operate import save_data_to_json_files
+            global_config = asdict(self)
+            working_dir = global_config.get("working_dir", os.getcwd())
+            namespace = global_config.get("namespace", "default")
+            
+            await save_data_to_json_files(
+                entities_data=temp_entity_data if temp_entity_data else None,
+                relationships_data=temp_relationship_data if temp_relationship_data else None,
+                chunks_data=None,
+                working_dir=working_dir,
+                namespace=namespace
+            )
+            
+            logger.info("Data saved to JSON files for later vector DB update")
+            await self._insert_done()
+
+    # async def apipeline_process_enqueue_documents(
+    #     self,
+    #     split_by_character: str | None = None,
+    #     split_by_character_only: bool = False,
+    # ) -> None:
+    #     """
+    #     Process pending documents by splitting them into chunks and processing
+    #     all chunks in parallel for entity and relation extraction.
+
+    #     1. Get all pending, failed, and abnormally terminated processing documents
+    #     2. Update all documents to processing status
+    #     3. Split all documents into chunks
+    #     4. Process all chunks in parallel (with batches also processed in parallel)
+    #     5. Update all document statuses
+    #     """
+    #     # 1. Get all pending, failed, and abnormally terminated processing documents
+    #     to_process_docs_full: dict[str, DocProcessingStatus] = {}
+
+    #     processing_docs = await self.doc_status.get_docs_by_status(DocStatus.PROCESSING)
+    #     to_process_docs_full.update(processing_docs)
+    #     failed_docs = await self.doc_status.get_docs_by_status(DocStatus.FAILED)
+    #     to_process_docs_full.update(failed_docs)
+    #     pendings_docs = await self.doc_status.get_docs_by_status(DocStatus.PENDING)
+    #     to_process_docs_full.update(pendings_docs)
+
+    #     if not to_process_docs_full:
+    #         logger.info("All documents have been processed or are duplicates")
+    #         return
+
+    #     batch_size = self.addon_params.get("insert_batch_size", 10)
+    #     docs_batches = [
+    #         list(to_process_docs_full.items())[i : i + batch_size]
+    #         for i in range(0, len(to_process_docs_full), batch_size)
+    #     ]
+        
+    #     logger.info(f"Number of batches to process: {len(docs_batches)}.")
+        
+    #     delay_vector_db_update = self.addon_params.get("delay_vector_db_update", False)
+    #     # Initialize temporary storage for entity and relationship data
+    #     temp_entity_data = {}
+    #     temp_relationship_data = {}
+    #     temp_chunks_data = {}
+
+    #     # Define a function to process a single batch
+    #     async def process_batch(to_process_docs):
+    #         # 2. Update all documents to processing status
+    #         status_updates = {}
+    #         for doc_id, status_doc in to_process_docs:
+    #             doc_status_id = compute_mdhash_id(status_doc.content, prefix="doc-")
+    #             status_updates[doc_status_id] = {
+    #                 "status": DocStatus.PROCESSING,
+    #                 "updated_at": datetime.now().isoformat(),
+    #                 "content": status_doc.content,
+    #                 "content_summary": status_doc.content_summary,
+    #                 "content_length": status_doc.content_length,
+    #                 "created_at": status_doc.created_at,
+    #             }
+            
+    #         await self.doc_status.upsert(status_updates)
+    #         logger.info(f"Updated {len(status_updates)} documents to processing status")
+
+    #         # 3. Generate all chunks from all documents
+    #         all_chunks = {}
+    #         doc_chunk_mapping = {}  # Maps doc_id to its chunks for later status updates
+            
+    #         for doc_id, status_doc in to_process_docs:
+    #             doc_chunks = {
+    #                 compute_mdhash_id(dp["content"], prefix="chunk-"): {
+    #                     **dp,
+    #                     "full_doc_id": doc_id,
+    #                 }
+    #                 for dp in self.chunking_func(
+    #                     status_doc.content,
+    #                     split_by_character,
+    #                     split_by_character_only,
+    #                     self.chunk_overlap_token_size,
+    #                     self.chunk_token_size,
+    #                     self.tiktoken_model_name,
+    #                 )
+    #             }
+                
+    #             all_chunks.update(doc_chunks)
+    #             doc_chunk_mapping[doc_id] = {
+    #                 "status_doc": status_doc,
+    #                 "chunk_count": len(doc_chunks)
+    #             }
+            
+    #         logger.info(f"Generated {len(all_chunks)} chunks from {len(to_process_docs)} documents")
+
+    #         # 4. Process all chunks in parallel
+    #         try:
+    #             # If delay_vector_db_update is true, only create the entity-relation graph first
+    #             # and store vector data for later update
+    #             batch_entity_data = {}
+    #             batch_relationship_data = {}
+                
+    #             if delay_vector_db_update:
+    #                 # Process entity-relation graph first
+    #                 # _process_entity_relation_graph will now return the entity and relationship data
+    #                 entity_data, relationship_data = await self._process_entity_relation_graph_with_delay(all_chunks)
+    #                 # Store data for later vector db update
+    #                 if entity_data:
+    #                     batch_entity_data.update(entity_data)
+    #                 if relationship_data:
+    #                     batch_relationship_data.update(relationship_data)
+                    
+    #                 # Upload only text chunks and full documents
+    #                 full_docs_upload = {
+    #                     doc_id: {"content": status_doc.content} 
+    #                     for doc_id, status_doc in to_process_docs
+    #                 }
+    #                 await self.full_docs.upsert(full_docs_upload)
+    #                 await self.text_chunks.upsert(all_chunks)
+    #             else:
+    #                 # Standard processing - upload to vector database immediately
+    #                 await self.chunks_vdb.upsert(all_chunks)
+    #                 await self._process_entity_relation_graph(all_chunks)
+                    
+    #                 # Upload all full documents
+    #                 full_docs_upload = {
+    #                     doc_id: {"content": status_doc.content} 
+    #                     for doc_id, status_doc in to_process_docs
+    #                 }
+    #                 await self.full_docs.upsert(full_docs_upload)
+                    
+    #                 # Upload all text chunks
+    #                 await self.text_chunks.upsert(all_chunks)
+                
+    #             # 5. Update all document statuses to processed
+    #             success_updates = {}
+    #             for doc_id, mapping in doc_chunk_mapping.items():
+    #                 status_doc = mapping["status_doc"]
+    #                 doc_status_id = compute_mdhash_id(status_doc.content, prefix="doc-")
+    #                 success_updates[doc_status_id] = {
+    #                     "status": DocStatus.PROCESSED,
+    #                     "chunks_count": mapping["chunk_count"],
+    #                     "content": status_doc.content,
+    #                     "content_summary": status_doc.content_summary,
+    #                     "content_length": status_doc.content_length,
+    #                     "created_at": status_doc.created_at,
+    #                     "updated_at": datetime.now().isoformat(),
+    #                 }
+                
+    #             await self.doc_status.upsert(success_updates)
+    #             if not delay_vector_db_update:
+    #                 await self._insert_done()
+    #             logger.info(f"Successfully processed {len(success_updates)} documents")
+                
+    #             return {
+    #                 "success": True,
+    #                 "entity_data": batch_entity_data,
+    #                 "relationship_data": batch_relationship_data,
+    #                 "chunks_data": all_chunks if delay_vector_db_update else {}
+    #             }
+                
+    #         except Exception as e:
+    #             logger.error(f"Failed during parallel processing: {str(e)}")
+                
+    #             # Update all documents to failed status if there's a general failure
+    #             failure_updates = {}
+    #             for doc_id, mapping in doc_chunk_mapping.items():
+    #                 status_doc = mapping["status_doc"]
+    #                 doc_status_id = compute_mdhash_id(status_doc.content, prefix="doc-")
+    #                 failure_updates[doc_status_id] = {
+    #                     "status": DocStatus.FAILED,
+    #                     "error": str(e),
+    #                     "content": status_doc.content,
+    #                     "content_summary": status_doc.content_summary,
+    #                     "content_length": status_doc.content_length,
+    #                     "created_at": status_doc.created_at,
+    #                     "updated_at": datetime.now().isoformat(),
+    #                 }
+                
+    #             await self.doc_status.upsert(failure_updates)
+    #             return {"success": False}
+
+    #     # Process all batches in parallel
+    #     import asyncio
+    #     batch_results = await asyncio.gather(*[process_batch(batch) for batch in docs_batches])
+        
+    #     # Combine all entity and relationship data from batches
+    #     if delay_vector_db_update:
+    #         for result in batch_results:
+    #             if result.get("success", False):
+    #                 if result.get("entity_data"):
+    #                     temp_entity_data.update(result["entity_data"])
+    #                 if result.get("relationship_data"):
+    #                     temp_relationship_data.update(result["relationship_data"])
+    #                 if result.get("chunks_data"):
+    #                     temp_chunks_data.update(result["chunks_data"])
+        
+    #         # After all batches are processed, if delay_vector_db_update is true,
+    #         # save all collected data to JSON files instead of updating vector DBs
+    #         if temp_entity_data or temp_relationship_data or temp_chunks_data:
+    #             logger.info(f"Saving all collected data to JSON files: {len(temp_entity_data)} entities, {len(temp_relationship_data)} relationships, {len(temp_chunks_data)} chunks")
+                
+    #             from lightrag.operate import save_data_to_json_files
+    #             global_config = asdict(self)
+    #             working_dir = global_config.get("working_dir", os.getcwd())
+    #             namespace = global_config.get("namespace", "default")
+                
+    #             await save_data_to_json_files(
+    #                 entities_data=temp_entity_data if temp_entity_data else None,
+    #                 relationships_data=temp_relationship_data if temp_relationship_data else None,
+    #                 chunks_data=None,
+    #                 working_dir=working_dir,
+    #                 namespace=namespace
+    #             )
+                
+    #             logger.info("Data saved to JSON files for later vector DB update")
+    #             await self._insert_done()
 
     async def _process_entity_relation_graph(self, chunk: dict[str, Any]) -> None:
         try:
@@ -1171,67 +1308,6 @@ class LightRAG:
             logger.error(f"Failed to extract entities and relationships: {e}")
             raise e
     
-    # async def _link_cross_lingual_entities(
-    #     self, 
-    #     new_entities: list[str], 
-    #     source_language: str = "Vietnamese",
-    #     matching_method: str = "hybrid"  # Thêm tham số này
-    # ) -> None:
-    #     """
-    #     Try to find matches for new entities in other languages and create cross-lingual links
-    #     """
-    #     if not new_entities:
-    #         return
-            
-    #     logger.info(f"Looking for cross-lingual matches for {len(new_entities)} new entities")
-        
-    #     # Tìm các entities trong các ngôn ngữ khác
-    #     existing_entities = []
-    #     for node in self.chunk_entity_relation_graph._graph.nodes():
-    #         if node in new_entities:
-    #             continue
-                
-    #         node_data = self.chunk_entity_relation_graph._graph.nodes[node]
-    #         entity_language = node_data.get("language", "")
-            
-    #         # Xác định ngôn ngữ của entity
-    #         if not entity_language:
-    #             for u, v, edge_data in self.chunk_entity_relation_graph._graph.edges(data=True):
-    #                 if u == node or v == node:
-    #                     if edge_data.get("relation_type") == "translation_equivalent":
-    #                         if edge_data.get("original_language") and edge_data.get("original_language") != source_language:
-    #                             entity_language = edge_data.get("original_language")
-    #                             break
-    #                         elif edge_data.get("translated_language") and edge_data.get("translated_language") != source_language:
-    #                             entity_language = edge_data.get("translated_language")
-    #                             break
-            
-    #         if entity_language and entity_language != source_language:
-    #             existing_entities.append((node, entity_language))
-        
-    #     # Group entities by language
-    #     entities_by_language = {}
-    #     for entity, language in existing_entities:
-    #         if language not in entities_by_language:
-    #             entities_by_language[language] = []
-    #         entities_by_language[language].append(entity)
-        
-    #     # Match và link cho từng ngôn ngữ
-    #     for target_language, target_entities in entities_by_language.items():
-    #         entity_pairs = await self._match_entities_for_linking(
-    #             new_entities, 
-    #             target_entities,
-    #             source_language,
-    #             target_language,
-    #             matching_method=matching_method  # Truyền method vào
-    #         )
-            
-    #         if entity_pairs:
-    #             await self._add_cross_lingual_links(
-    #                 entity_pairs, 
-    #                 source_language, 
-    #                 target_language
-    #             )
     async def _link_cross_lingual_entities(
         self, 
         new_entities: list[str], 
@@ -4373,3 +4449,170 @@ class LightRAG:
 
         print("Add new embedding sucessfully")
 
+    async def _process_entity_relation_graph_with_delay(self, chunk: dict[str, Any]) -> tuple[dict, dict]:
+        """
+        Process entity relation graph without updating vector databases.
+        Returns the entity and relationship data for later vector database update.
+        
+        Args:
+            chunk: Dictionary of chunks to process
+            
+        Returns:
+            tuple: (entity_data_for_vdb, relationship_data_for_vdb)
+        """
+        try:
+            # Use a modified version of extract_entities that doesn't update vector databases
+            temp_entity_data = {}
+            temp_relationship_data = {}
+            
+            global_config = asdict(self)
+            # Add flag to indicate we're delaying vector db updates
+            global_config["delay_vector_db_update"] = True
+            
+            new_kg = await extract_entities(
+                chunk,
+                knowledge_graph_inst=self.chunk_entity_relation_graph,
+                entity_vdb=None,  # Pass None to prevent direct vector DB updates
+                relationships_vdb=None,  # Pass None to prevent direct vector DB updates
+                llm_response_cache=self.llm_response_cache,
+                global_config=global_config,
+            )
+            
+            if new_kg is None:
+                logger.info("No new entities or relationships extracted.")
+                return {}, {}
+            
+            logger.info("New entities or relationships extracted.")
+            self.chunk_entity_relation_graph = new_kg
+            
+            # Get all extracted entities and relationships for this chunk
+            # for node in self.chunk_entity_relation_graph._graph.nodes(data=True):
+            #     node_id, node_data = node
+            #     # Check if this node was derived from the current chunk
+            #     if "source_id" in node_data:
+            #         source_ids = node_data["source_id"].split("|") if "|" in node_data["source_id"] else [node_data["source_id"]]
+            #         if any(chunk_id in chunk for chunk_id in source_ids):
+            #             # Format entity data for vector database
+            #             entity_key = compute_mdhash_id(node_id, prefix="ent-")
+            #             temp_entity_data[entity_key] = {
+            #                 "content": node_id + (node_data.get("description", "")),
+            #                 "entity_name": node_id,
+            #             }
+            
+            # # Get all extracted relationships
+            # for src, tgt, edge_data in self.chunk_entity_relation_graph._graph.edges(data=True):
+            #     if "source_id" in edge_data:
+            #         source_ids = edge_data["source_id"].split("|") if "|" in edge_data["source_id"] else [edge_data["source_id"]]
+            #         if any(chunk_id in chunk for chunk_id in source_ids):
+            #             # Format relationship data for vector database
+            #             rel_key = compute_mdhash_id(src + tgt, prefix="rel-")
+            #             temp_relationship_data[rel_key] = {
+            #                 "src_id": src,
+            #                 "tgt_id": tgt,
+            #                 "content": edge_data.get("keywords", "") + src + tgt + edge_data.get("description", ""),
+            #                 "metadata": {
+            #                     "created_at": edge_data.get("metadata", {}).get("created_at", time.time())
+            #                 },
+            #             }
+            all_nodes = await self.chunk_entity_relation_graph.get_all_nodes()
+            all_edges = await self.chunk_entity_relation_graph.get_all_edges()
+            
+            logger.info(f"Loading all {len(all_nodes)} entities and {len(all_edges)} relationships from the graph for JSON storage")
+            
+            # Format all entity data for vector database
+            for node_id, node_data in all_nodes.items():
+                entity_key = compute_mdhash_id(node_id, prefix="ent-")
+                temp_entity_data[entity_key] = {
+                    "content": node_id + (node_data.get("description", "")),
+                    "entity_name": node_id,
+                }  
+                       
+            for edge in all_edges:
+                src, tgt, edge_data = edge
+                rel_key = compute_mdhash_id(src + tgt, prefix="rel-")
+                temp_relationship_data[rel_key] = {
+                    "src_id": src,
+                    "tgt_id": tgt,
+                    "content": edge_data.get("keywords", "") + src + tgt + edge_data.get("description", ""),
+                    "metadata": {
+                        "created_at": edge_data.get("metadata", {}).get("created_at", time.time())
+                    },
+                }   
+            # Process cross-lingual entities if needed
+            if self.addon_params["need_cross_language"]:
+                extracted_entities = []
+                for node in self.chunk_entity_relation_graph._graph.nodes():
+                    node_data = self.chunk_entity_relation_graph._graph.nodes[node]
+                    if "source_id" in node_data:
+                        source_ids = node_data["source_id"].split("|") if "|" in node_data["source_id"] else [node_data["source_id"]]
+                        # Check if any of the chunk keys are in source_ids
+                        if any(chunk_id in chunk for chunk_id in source_ids):
+                            extracted_entities.append(node)
+                
+                if extracted_entities:
+                    # Get default language from addon_params
+                    current_language = self.addon_params.get("current_language", "Vietnamese")
+                    # Try to link with existing entities in other languages
+                    await self._link_cross_lingual_entities(extracted_entities, current_language, matching_method=self.addon_params["matching_method"])
+            
+            return temp_entity_data, temp_relationship_data
+
+        except Exception as e:
+            logger.error(f"Failed to extract entities and relationships: {e}")
+            raise e
+
+    def load_vector_data_from_json(
+        self,
+        vector_data_dir: str = None,
+        manifest_pattern: str = None,
+        namespace: str = None,
+    ) -> dict[str, int]:
+        """Load vector data from JSON files and create vector databases
+        
+        Args:
+            vector_data_dir: Directory containing the JSON files, defaults to working_dir/vector_data
+            manifest_pattern: Pattern to match manifest files
+            namespace: Namespace to filter manifests by
+            
+        Returns:
+            dict[str, int]: Counts of loaded entities, relationships, and chunks
+        """
+        if vector_data_dir is None:
+            vector_data_dir = os.path.join(self.global_config["working_dir"], "vector_data")
+            
+        loop = always_get_an_event_loop()
+        return loop.run_until_complete(
+            self.aload_vector_data_from_json(vector_data_dir, manifest_pattern, namespace)
+        )
+        
+    async def aload_vector_data_from_json(
+        self,
+        vector_data_dir: str,
+        manifest_pattern: str = None,
+        namespace: str = None,
+    ) -> dict[str, int]:
+        """Async version of load_vector_data_from_json
+        
+        Args:
+            vector_data_dir: Directory containing the JSON files
+            manifest_pattern: Pattern to match manifest files
+            namespace: Namespace to filter manifests by
+            
+        Returns:
+            dict[str, int]: Counts of loaded entities, relationships, and chunks
+        """
+        from lightrag.operate import load_json_files_to_vector_db
+        
+        result = await load_json_files_to_vector_db(
+            vector_data_dir=vector_data_dir,
+            entities_vdb=self.entities_vdb,
+            relationships_vdb=self.relationships_vdb,
+            chunks_vdb=self.chunks_vdb,
+            manifest_pattern=manifest_pattern,
+            namespace=namespace,
+        )
+        
+        # Call insert_done to ensure all vector databases are saved
+        await self._insert_done()
+        
+        return result

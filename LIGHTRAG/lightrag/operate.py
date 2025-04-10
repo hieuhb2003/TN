@@ -24,7 +24,9 @@ from .utils import (
     statistic_data,
     get_conversation_turns,
     csv_string_to_list,
-    detect_language
+    detect_language,
+    load_json,
+    write_json
 )
 import numpy as np
 from .base import (
@@ -37,6 +39,8 @@ from .base import (
 from .prompt import GRAPH_FIELD_SEP, PROMPTS, get_prompt
 import time
 from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine_similarity
+import os
+import glob
 
 
 def chunking_by_token_size(
@@ -344,6 +348,77 @@ async def _merge_edges_then_upsert(
     return edge_data
 
 
+async def save_data_to_json_files(
+    entities_data: dict[str, dict[str, Any]] = None,
+    relationships_data: dict[str, dict[str, Any]] = None,
+    chunks_data: dict[str, dict[str, Any]] = None,
+    working_dir: str = None,
+    namespace: str = None,
+) -> dict[str, str]:
+    """Save entity, relationship, and chunk data to JSON files for later vector DB insertion
+    
+    Args:
+        entities_data: Dictionary mapping entity IDs to entity data
+        relationships_data: Dictionary mapping relationship IDs to relationship data
+        chunks_data: Dictionary mapping chunk IDs to chunk data
+        working_dir: Directory to save JSON files
+        namespace: Namespace to use in filenames
+        
+    Returns:
+        dict[str, str]: Paths to the saved JSON files
+    """
+    if working_dir is None:
+        working_dir = os.getcwd()
+    
+    if namespace is None:
+        namespace = "default"
+        
+    timestamp = int(time.time())
+    result_paths = {}
+    
+    # Create a directory for the JSON files if it doesn't exist
+    json_dir = os.path.join(working_dir, "vector_data")
+    os.makedirs(json_dir, exist_ok=True)
+    
+    # Save entities data
+    if entities_data:
+        entities_file = os.path.join(json_dir, f"entities.json")
+        write_json(entities_data, entities_file)
+        result_paths["entities"] = entities_file
+        logger.info(f"Saved {len(entities_data)} entities to {entities_file}")
+    
+    # Save relationships data
+    if relationships_data:
+        relationships_file = os.path.join(json_dir, f"relationships.json")
+        write_json(relationships_data, relationships_file)
+        result_paths["relationships"] = relationships_file
+        logger.info(f"Saved {len(relationships_data)} relationships to {relationships_file}")
+    
+    # Save chunks data
+    if chunks_data:
+        chunks_file = os.path.join(json_dir, f"chunks.json")
+        write_json(chunks_data, chunks_file)
+        result_paths["chunks"] = chunks_file
+        logger.info(f"Saved {len(chunks_data)} chunks to {chunks_file}")
+    
+    # Save a manifest file that lists all the files saved in this batch
+    manifest = {
+        "timestamp": timestamp,
+        "namespace": namespace,
+        "files": result_paths,
+        "counts": {
+            "entities": len(entities_data) if entities_data else 0,
+            "relationships": len(relationships_data) if relationships_data else 0,
+            "chunks": len(chunks_data) if chunks_data else 0,
+        }
+    }
+    
+    manifest_file = os.path.join(json_dir, f"manifest.json")
+    write_json(manifest, manifest_file)
+    result_paths["manifest"] = manifest_file
+    
+    return result_paths
+
 async def extract_entities(
     chunks: dict[str, TextChunkSchema],
     knowledge_graph_inst: BaseGraphStorage,
@@ -357,6 +432,8 @@ async def extract_entities(
     enable_llm_cache_for_entity_extract: bool = global_config[
         "enable_llm_cache_for_entity_extract"
     ]
+    # Check if we're delaying vector DB updates
+    delay_vector_db_update = global_config.get("delay_vector_db_update", False)
 
     ordered_chunks = list(chunks.items())
     # add language and example number params to prompt
@@ -562,32 +639,46 @@ async def extract_entities(
     if not len(all_relationships_data):
         logger.warning("Didn't extract any relationships")
 
-    if entity_vdb is not None:
-        data_for_vdb = {
-            compute_mdhash_id(dp["entity_name"], prefix="ent-"): {
-                "content": dp["entity_name"] + dp["description"],
-                "entity_name": dp["entity_name"],
-            }
-            for dp in all_entities_data
+    # Prepare data for vector databases or JSON files
+    entities_for_vdb = {
+        compute_mdhash_id(dp["entity_name"], prefix="ent-"): {
+            "content": dp["entity_name"] + dp["description"],
+            "entity_name": dp["entity_name"],
         }
-        await entity_vdb.upsert(data_for_vdb)
+        for dp in all_entities_data
+    }
+    
+    relationships_for_vdb = {
+        compute_mdhash_id(dp["src_id"] + dp["tgt_id"], prefix="rel-"): {
+            "src_id": dp["src_id"],
+            "tgt_id": dp["tgt_id"],
+            "content": dp["keywords"]
+            + dp["src_id"]
+            + dp["tgt_id"]
+            + dp["description"],
+            "metadata": {
+                "created_at": dp.get("metadata", {}).get("created_at", time.time())
+            },
+        }
+        for dp in all_relationships_data
+    }
 
-    if relationships_vdb is not None:
-        data_for_vdb = {
-            compute_mdhash_id(dp["src_id"] + dp["tgt_id"], prefix="rel-"): {
-                "src_id": dp["src_id"],
-                "tgt_id": dp["tgt_id"],
-                "content": dp["keywords"]
-                + dp["src_id"]
-                + dp["tgt_id"]
-                + dp["description"],
-                "metadata": {
-                    "created_at": dp.get("metadata", {}).get("created_at", time.time())
-                },
-            }
-            for dp in all_relationships_data
-        }
-        await relationships_vdb.upsert(data_for_vdb)
+    # # If delaying vector DB updates, save to JSON files
+    # if delay_vector_db_update:
+    #     working_dir = global_config.get("working_dir", os.getcwd())
+    #     namespace = global_config.get("namespace", "default")
+        
+    #     # Save entity and relationship data to JSON files
+    #     await save_data_to_json_files(
+    #         entities_data=entities_for_vdb,
+    #         relationships_data=relationships_for_vdb,
+    #         working_dir=working_dir,
+    #         namespace=namespace
+    #     )
+    # Otherwise, update vector databases immediately
+    if delay_vector_db_update and entity_vdb is not None and relationships_vdb is not None:
+        await entity_vdb.upsert(entities_for_vdb)
+        await relationships_vdb.upsert(relationships_for_vdb)
 
     return knowledge_graph_inst
 
@@ -2406,3 +2497,106 @@ async def kg_query_with_keywords(
         ),
     )
     return response
+
+async def load_json_files_to_vector_db(
+    vector_data_dir: str,
+    entities_vdb: BaseVectorStorage,
+    relationships_vdb: BaseVectorStorage,
+    chunks_vdb: BaseVectorStorage,
+    manifest_pattern: str = None,
+    namespace: str = None,
+) -> dict[str, int]:
+    """Load JSON files saved from prior extraction and create vector databases
+    
+    Args:
+        vector_data_dir: Directory containing the JSON files
+        entities_vdb: Vector database for entities
+        relationships_vdb: Vector database for relationships  
+        chunks_vdb: Vector database for chunks
+        manifest_pattern: Pattern to match manifest files (default: all manifest files)
+        namespace: Namespace to filter manifests by
+        
+    Returns:
+        dict[str, int]: Counts of loaded entities, relationships, and chunks
+    """
+    if not os.path.exists(vector_data_dir):
+        logger.error(f"Vector data directory '{vector_data_dir}' does not exist")
+        return {"entities": 0, "relationships": 0, "chunks": 0}
+    
+    # Find all manifest files
+    manifest_files = []
+    if manifest_pattern:
+        import glob
+        manifest_files = glob.glob(os.path.join(vector_data_dir, manifest_pattern))
+    else:
+        manifest_files = [
+            os.path.join(vector_data_dir, f) 
+            for f in os.listdir(vector_data_dir)
+            if f.startswith("manifest_") and f.endswith(".json")
+        ]
+    
+    if namespace:
+        manifest_files = [f for f in manifest_files if f"_{namespace}_" in f]
+    
+    if not manifest_files:
+        logger.warning(f"No manifest files found in '{vector_data_dir}'")
+        return {"entities": 0, "relationships": 0, "chunks": 0}
+    
+    logger.info(f"Found {len(manifest_files)} manifest files to process")
+    
+    # Process each manifest
+    total_entities = 0
+    total_relationships = 0
+    total_chunks = 0
+    
+    for manifest_file in sorted(manifest_files):
+        manifest = load_json(manifest_file)
+        if not manifest:
+            logger.warning(f"Empty or invalid manifest file: {manifest_file}")
+            continue
+        
+        # Load entity data
+        if "entities" in manifest["files"]:
+            entity_file = manifest["files"]["entities"]
+            if os.path.exists(entity_file):
+                entity_data = load_json(entity_file)
+                if entity_data:
+                    total_entities += len(entity_data)
+                    logger.info(f"Loading {len(entity_data)} entities from {entity_file}")
+                    await entities_vdb.upsert(entity_data)
+            else:
+                logger.warning(f"Entity file {entity_file} not found")
+        
+        # Load relationship data
+        if "relationships" in manifest["files"]:
+            relationship_file = manifest["files"]["relationships"]
+            if os.path.exists(relationship_file):
+                relationship_data = load_json(relationship_file)
+                if relationship_data:
+                    total_relationships += len(relationship_data)
+                    logger.info(f"Loading {len(relationship_data)} relationships from {relationship_file}")
+                    await relationships_vdb.upsert(relationship_data)
+            else:
+                logger.warning(f"Relationship file {relationship_file} not found")
+        
+        # Load chunk data
+        if "chunks" in manifest["files"]:
+            chunk_file = manifest["files"]["chunks"]
+            if os.path.exists(chunk_file):
+                chunk_data = load_json(chunk_file)
+                if chunk_data:
+                    total_chunks += len(chunk_data)
+                    logger.info(f"Loading {len(chunk_data)} chunks from {chunk_file}")
+                    await chunks_vdb.upsert(chunk_data)
+            else:
+                logger.warning(f"Chunk file {chunk_file} not found")
+    
+    # Final counts
+    result = {
+        "entities": total_entities,
+        "relationships": total_relationships,
+        "chunks": total_chunks,
+    }
+    
+    logger.info(f"Total loaded: {total_entities} entities, {total_relationships} relationships, {total_chunks} chunks")
+    return result
