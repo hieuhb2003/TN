@@ -435,6 +435,16 @@ async def extract_entities(
     # Check if we're delaying vector DB updates
     delay_vector_db_update = global_config.get("delay_vector_db_update", False)
 
+    # Set up directories for JSONL files if delay_vector_db_update is True
+    if delay_vector_db_update:
+        working_dir = global_config.get("working_dir", os.getcwd())
+        vector_data_dir = os.path.join(working_dir, "vector_data")
+        os.makedirs(vector_data_dir, exist_ok=True)
+        
+        # Define entity and relation JSONL files
+        entity_jsonl_file = os.path.join(vector_data_dir, "entities_extraction.jsonl")
+        relation_jsonl_file = os.path.join(vector_data_dir, "relations_extraction.jsonl")
+
     ordered_chunks = list(chunks.items())
     # add language and example number params to prompt
     language = global_config["addon_params"].get(
@@ -479,6 +489,44 @@ async def extract_entities(
     already_processed = 0
     already_entities = 0
     already_relations = 0
+    
+    # Function to save entity to JSONL
+    async def save_entity_to_jsonl(entity_data):
+        if not delay_vector_db_update:
+            return
+        
+        print("Entity data: ", entity_data)
+        
+        # Create entity record with entity name, description and chunk_id
+        entity_record = {
+            "entity_name": entity_data["entity_name"],
+            "description": entity_data["description"],
+            "chunk_id": entity_data["source_id"],
+            "timestamp": time.time()
+        }
+        
+        # Append to JSONL file
+        with open(entity_jsonl_file, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(entity_record, ensure_ascii=False) + '\n')
+    
+    # Function to save relation to JSONL
+    async def save_relation_to_jsonl(relation_data):
+        if not delay_vector_db_update:
+            return
+        
+        print("Relation data: ", relation_data)
+        # Create relation record with src, tgt, description and chunk_id
+        relation_record = {
+            "src_id": relation_data["src_id"],
+            "tgt_id": relation_data["tgt_id"],
+            "description": relation_data["description"],
+            "chunk_id": relation_data["source_id"],
+            "timestamp": time.time()
+        }
+        
+        # Append to JSONL file
+        with open(relation_jsonl_file, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(relation_record, ensure_ascii=False) + '\n')
 
     async def _user_llm_func_with_cache(
         input_text: str, history_messages: list[dict[str, str]] = None
@@ -582,6 +630,9 @@ async def extract_entities(
             )
             if if_entities is not None:
                 maybe_nodes[if_entities["entity_name"]].append(if_entities)
+                # Save entity to JSONL immediately if delay_vector_db_update is True
+                if delay_vector_db_update:
+                    await save_entity_to_jsonl(if_entities)
                 continue
 
             if_relation = await _handle_single_relationship_extraction(
@@ -592,6 +643,10 @@ async def extract_entities(
                 maybe_edges[(if_relation["src_id"], if_relation["tgt_id"])].append(
                     if_relation
                 )
+                # Save relation to JSONL immediately if delay_vector_db_update is True
+                if delay_vector_db_update:
+                    await save_relation_to_jsonl(if_relation)
+                    
         already_processed += 1
         already_entities += len(maybe_nodes)
         already_relations += len(maybe_edges)
@@ -663,22 +718,15 @@ async def extract_entities(
         for dp in all_relationships_data
     }
 
-    # # If delaying vector DB updates, save to JSON files
-    # if delay_vector_db_update:
-    #     working_dir = global_config.get("working_dir", os.getcwd())
-    #     namespace = global_config.get("namespace", "default")
-        
-    #     # Save entity and relationship data to JSON files
-    #     await save_data_to_json_files(
-    #         entities_data=entities_for_vdb,
-    #         relationships_data=relationships_for_vdb,
-    #         working_dir=working_dir,
-    #         namespace=namespace
-    #     )
-    # Otherwise, update vector databases immediately
-    if delay_vector_db_update and entity_vdb is not None and relationships_vdb is not None:
+    # Update vector databases if not delaying updates
+    if not delay_vector_db_update and entity_vdb is not None and relationships_vdb is not None:
         await entity_vdb.upsert(entities_for_vdb)
         await relationships_vdb.upsert(relationships_for_vdb)
+
+    # Log message about saved JSONL files if delay_vector_db_update is True
+    if delay_vector_db_update:
+        logger.info(f"Entity extraction data saved to {entity_jsonl_file}")
+        logger.info(f"Relation extraction data saved to {relation_jsonl_file}")
 
     return knowledge_graph_inst
 

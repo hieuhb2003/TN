@@ -143,6 +143,7 @@ async def openai_complete_if_cache(
             or not hasattr(response.choices[0], "message")
             or not hasattr(response.choices[0].message, "content")
         ):
+            print(response)
             logger.error("Invalid response from OpenAI API")
             raise InvalidResponseError("Invalid response from OpenAI API")
 

@@ -35,6 +35,7 @@ from .operate import (
     _merge_edges_then_upsert,
     naive_retrieval,
     save_data_to_json_files,
+    # save_to_jsonl,
 )
 
 
@@ -308,8 +309,8 @@ class LightRAG:
     # Entity extraction
     entity_extract_max_gleaning: int = 1
     """Maximum number of entity extraction attempts for ambiguous content."""
-
-    entity_summary_to_max_tokens: int = int(os.getenv("MAX_TOKEN_SUMMARY", "500"))
+    import sys
+    entity_summary_to_max_tokens: int = int(os.getenv("MAX_TOKEN_SUMMARY", str(sys.maxsize)))
     """Maximum number of tokens used for summarizing extracted entities."""
 
     # Node embedding
@@ -741,7 +742,7 @@ class LightRAG:
         self.addon_params["current_language"] = language
         self.addon_params["matching_method"] = matching_method
         self.addon_params["delay_vector_db_update"] = delay_vector_db_update
-        print(self.addon_params)
+        # print(self.addon_params)
         await self.apipeline_enqueue_documents(input)
         await self.apipeline_process_enqueue_documents(
             split_by_character, split_by_character_only
@@ -906,7 +907,12 @@ class LightRAG:
             list(to_process_docs_full.items())[i : i + batch_size]
             for i in range(0, len(to_process_docs_full), batch_size)
         ]
-
+        # docs_batches = []
+        # for i in range(0, len(to_process_docs_full), batch_size):
+        #     docs_batches.append(
+        #         list(to_process_docs_full.items())[i : i + batch_size]
+        #     )
+            # print(i)
         delay_vector_db_update = self.addon_params.get("delay_vector_db_update", False)
         # Initialize temporary storage for entity and relationship data
         temp_entity_data = {}
@@ -1016,6 +1022,25 @@ class LightRAG:
                 await self.doc_status.upsert(success_updates)
                 if not delay_vector_db_update:
                     await self._insert_done()
+                    
+                if delay_vector_db_update and (temp_entity_data or temp_relationship_data or temp_chunks_data):
+                    logger.info(f"Saving all collected data to JSON files: {len(temp_entity_data)} entities, {len(temp_relationship_data)} relationships, {len(temp_chunks_data)} chunks")
+                    
+                    from lightrag.operate import save_data_to_json_files
+                    global_config = asdict(self)
+                    working_dir = global_config.get("working_dir", os.getcwd())
+                    namespace = global_config.get("namespace", "default")
+                    
+                    await save_data_to_json_files(
+                        entities_data=temp_entity_data if temp_entity_data else None,
+                        relationships_data=temp_relationship_data if temp_relationship_data else None,
+                        chunks_data=None,
+                        working_dir=working_dir,
+                        namespace=namespace
+                    )
+                    
+                    logger.info("Data saved to JSON files for later vector DB update")
+                    await self._insert_done()
                 logger.info(f"Successfully processed {len(success_updates)} documents")
                 
             except Exception as e:
@@ -1040,24 +1065,24 @@ class LightRAG:
         
         # After all batches are processed, if delay_vector_db_update is true,
         # save all collected data to JSON files instead of updating vector DBs
-        if delay_vector_db_update and (temp_entity_data or temp_relationship_data or temp_chunks_data):
-            logger.info(f"Saving all collected data to JSON files: {len(temp_entity_data)} entities, {len(temp_relationship_data)} relationships, {len(temp_chunks_data)} chunks")
+        # if delay_vector_db_update and (temp_entity_data or temp_relationship_data or temp_chunks_data):
+        #     logger.info(f"Saving all collected data to JSON files: {len(temp_entity_data)} entities, {len(temp_relationship_data)} relationships, {len(temp_chunks_data)} chunks")
             
-            from lightrag.operate import save_data_to_json_files
-            global_config = asdict(self)
-            working_dir = global_config.get("working_dir", os.getcwd())
-            namespace = global_config.get("namespace", "default")
+        #     from lightrag.operate import save_data_to_json_files
+        #     global_config = asdict(self)
+        #     working_dir = global_config.get("working_dir", os.getcwd())
+        #     namespace = global_config.get("namespace", "default")
             
-            await save_data_to_json_files(
-                entities_data=temp_entity_data if temp_entity_data else None,
-                relationships_data=temp_relationship_data if temp_relationship_data else None,
-                chunks_data=None,
-                working_dir=working_dir,
-                namespace=namespace
-            )
+        #     await save_data_to_json_files(
+        #         entities_data=temp_entity_data if temp_entity_data else None,
+        #         relationships_data=temp_relationship_data if temp_relationship_data else None,
+        #         chunks_data=None,
+        #         working_dir=working_dir,
+        #         namespace=namespace
+        #     )
             
-            logger.info("Data saved to JSON files for later vector DB update")
-            await self._insert_done()
+        #     logger.info("Data saved to JSON files for later vector DB update")
+        #     await self._insert_done()
 
     # async def apipeline_process_enqueue_documents(
     #     self,
@@ -4485,35 +4510,6 @@ class LightRAG:
             logger.info("New entities or relationships extracted.")
             self.chunk_entity_relation_graph = new_kg
             
-            # Get all extracted entities and relationships for this chunk
-            # for node in self.chunk_entity_relation_graph._graph.nodes(data=True):
-            #     node_id, node_data = node
-            #     # Check if this node was derived from the current chunk
-            #     if "source_id" in node_data:
-            #         source_ids = node_data["source_id"].split("|") if "|" in node_data["source_id"] else [node_data["source_id"]]
-            #         if any(chunk_id in chunk for chunk_id in source_ids):
-            #             # Format entity data for vector database
-            #             entity_key = compute_mdhash_id(node_id, prefix="ent-")
-            #             temp_entity_data[entity_key] = {
-            #                 "content": node_id + (node_data.get("description", "")),
-            #                 "entity_name": node_id,
-            #             }
-            
-            # # Get all extracted relationships
-            # for src, tgt, edge_data in self.chunk_entity_relation_graph._graph.edges(data=True):
-            #     if "source_id" in edge_data:
-            #         source_ids = edge_data["source_id"].split("|") if "|" in edge_data["source_id"] else [edge_data["source_id"]]
-            #         if any(chunk_id in chunk for chunk_id in source_ids):
-            #             # Format relationship data for vector database
-            #             rel_key = compute_mdhash_id(src + tgt, prefix="rel-")
-            #             temp_relationship_data[rel_key] = {
-            #                 "src_id": src,
-            #                 "tgt_id": tgt,
-            #                 "content": edge_data.get("keywords", "") + src + tgt + edge_data.get("description", ""),
-            #                 "metadata": {
-            #                     "created_at": edge_data.get("metadata", {}).get("created_at", time.time())
-            #                 },
-            #             }
             all_nodes = await self.chunk_entity_relation_graph.get_all_nodes()
             all_edges = await self.chunk_entity_relation_graph.get_all_edges()
             
