@@ -109,11 +109,32 @@ async def openai_complete_if_cache(
         raise
     except RateLimitError as e:
         logger.error(f"OpenAI API Rate Limit Error: {e}")
+        # Đánh dấu đây là lỗi rate limit
+        e.is_rate_limit = True
         raise
     except APITimeoutError as e:
         logger.error(f"OpenAI API Timeout Error: {e}")
         raise
     except Exception as e:
+        error_str = str(e).lower()
+        # Kiểm tra xem có phải là lỗi rate limit không
+        rate_limit_indicators = [
+            "429",
+            "too many requests", 
+            "rate limit", 
+            "quota exceeded", 
+            "resource_exhausted",
+            "provider returned error"
+        ]
+        is_rate_limit = any(indicator in error_str for indicator in rate_limit_indicators)
+        
+        if is_rate_limit:
+            logger.error(f"Rate Limit Error detected: {e}")
+            # Thêm thuộc tính is_rate_limit vào exception để kiểm tra ở hàm gọi
+            e.is_rate_limit = True
+        else:
+            e.is_rate_limit = False
+            
         logger.error(
             f"OpenAI API Call Failed,\nModel: {model},\nParams: {kwargs}, Got: {e}"
         )
@@ -137,16 +158,47 @@ async def openai_complete_if_cache(
         return inner()
 
     else:
+        # Kiểm tra đặc biệt cho lỗi 429 từ OpenRouter
+        if hasattr(response, 'error') and response.error is not None:
+            error_info = response.error
+            error_str = str(error_info)
+            logger.error(f"Error in response: {error_str}")
+            
+            # Xác định lỗi rate limit từ OpenRouter
+            is_rate_limit = False
+            
+            # Trường hợp như ví dụ bạn đã cung cấp
+            if isinstance(error_info, dict) and 'code' in error_info and error_info['code'] == 429:
+                is_rate_limit = True
+                logger.error(f"Rate limit error detected with code 429: {error_str}")
+            
+            # Tạo exception với thông tin rate limit
+            exception = Exception(f"OpenRouter returned error: {error_str}")
+            exception.is_rate_limit = is_rate_limit
+            raise exception
+            
+        # Kiểm tra tính hợp lệ của response
         if (
             not response
-            or not response.choices
+            or not hasattr(response, 'choices')
+            or response.choices is None
+            or len(response.choices) == 0
             or not hasattr(response.choices[0], "message")
             or not hasattr(response.choices[0].message, "content")
         ):
-            print(response)
-            logger.error("Invalid response from OpenAI API")
-            raise InvalidResponseError("Invalid response from OpenAI API")
-
+            logger.error(f"Invalid response structure: {response}")
+            
+            # Kiểm tra xem response có phải là lỗi 429 không
+            is_rate_limit = False
+            response_str = str(response)
+            if "429" in response_str or "rate limit" in response_str.lower() or "quota exceeded" in response_str.lower():
+                is_rate_limit = True
+                logger.error(f"Detected rate limit in invalid response: {response_str}")
+            
+            exception = InvalidResponseError(f"Invalid response from OpenAI API: {response_str}")
+            exception.is_rate_limit = is_rate_limit
+            raise exception
+        
         content = response.choices[0].message.content
 
         if not content or content.strip() == "":
@@ -156,7 +208,6 @@ async def openai_complete_if_cache(
         if r"\u" in content:
             content = safe_unicode_decode(content.encode("utf-8"))
         return content
-
 
 async def openai_complete(
     prompt,

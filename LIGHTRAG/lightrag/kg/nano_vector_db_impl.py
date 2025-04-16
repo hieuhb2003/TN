@@ -1,8 +1,10 @@
 import asyncio
 import os
-from typing import Any, final
+from typing import Any, final, Dict, List
 from dataclasses import dataclass
 import numpy as np
+import json
+import base64
 
 import time
 
@@ -25,6 +27,137 @@ except ImportError as e:
         "`nano-vectordb` library is not installed. Please install it via pip: `pip install nano-vectordb`."
     ) from e
 
+def buffer_string_to_array(base64_str: str, dtype=np.float32) -> np.ndarray:
+    """Convert base64 encoded string to numpy array."""
+    return np.frombuffer(base64.b64decode(base64_str), dtype=dtype)
+
+def normalize(a: np.ndarray) -> np.ndarray:
+    """Normalize array to unit length."""
+    return a / np.linalg.norm(a, axis=-1, keepdims=True)
+
+def load_matrix_from_json(file_name: str) -> np.ndarray:
+    """Load a matrix from a JSON file.
+    
+    Args:
+        file_name: Path to the JSON file containing the matrix
+        
+    Returns:
+        numpy.ndarray: The loaded matrix
+    """
+    if not os.path.exists(file_name):
+        raise FileNotFoundError(f"File {file_name} not found")
+    
+    with open(file_name, encoding="utf-8") as f:
+        data = json.load(f)
+    
+    if "matrix" not in data:
+        raise ValueError("JSON file must contain a 'matrix' field")
+    
+    return buffer_string_to_array(data["matrix"]).reshape(-1, data["embedding_dim"])
+
+def find_similar_pairs(matrix1: np.ndarray, matrix2: np.ndarray, threshold: float = 0.8) -> list[tuple[int, int, float]]:
+    """Find similar pairs between two matrices using cosine similarity.
+    
+    Args:
+        matrix1: First matrix of shape (n, d)
+        matrix2: Second matrix of shape (m, d)
+        threshold: Similarity threshold (default: 0.8)
+        
+    Returns:
+        list[tuple[int, int, float]]: List of (index1, index2, similarity) tuples
+    """
+    # Normalize matrices
+    matrix1_norm = normalize(matrix1)
+    matrix2_norm = normalize(matrix2)
+    
+    # Compute cosine similarity
+    similarity = np.dot(matrix1_norm, matrix2_norm.T)
+    
+    # Find pairs above threshold
+    pairs = []
+    for i in range(similarity.shape[0]):
+        for j in range(similarity.shape[1]):
+            if similarity[i, j] >= threshold:
+                pairs.append((i, j, similarity[i, j]))
+    
+    return pairs
+
+def load_entity_vdb(file_path: str) -> Dict[str, Any]:
+    """Load entity VDB from file.
+    
+    Args:
+        file_path: Path to the VDB file
+        
+    Returns:
+        Dict containing VDB data
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File {file_path} not found")
+    
+    with open(file_path, encoding="utf-8") as f:
+        data = json.load(f)
+    
+    return data
+
+def find_entity_pairs(vdb1: Dict[str, Any], vdb2: Dict[str, Any], threshold: float = 0.8) -> List[Dict[str, Any]]:
+    """Find similar entity pairs between two VDBs.
+    
+    Args:
+        vdb1: First VDB data
+        vdb2: Second VDB data
+        threshold: Similarity threshold
+        
+    Returns:
+        List of similar entity pairs with metadata
+    """
+    # Extract matrices and entity data
+    matrix1 = buffer_string_to_array(vdb1["matrix"]).reshape(-1, vdb1["embedding_dim"])
+    matrix2 = buffer_string_to_array(vdb2["matrix"]).reshape(-1, vdb2["embedding_dim"])
+    
+    # Normalize matrices
+    matrix1_norm = normalize(matrix1)
+    matrix2_norm = normalize(matrix2)
+    
+    # Compute cosine similarity
+    similarity = np.dot(matrix1_norm, matrix2_norm.T)
+    
+    # Find pairs above threshold
+    pairs = []
+    for i in range(similarity.shape[0]):
+        for j in range(similarity.shape[1]):
+            if similarity[i, j] >= threshold:
+                entity1 = vdb1["data"][i]
+                entity2 = vdb2["data"][j]
+                pairs.append({
+                    "entity1": {
+                        "id": entity1["__id__"],
+                        "name": entity1.get("entity_name", ""),
+                        "type": entity1.get("type", ""),
+                        "index": i
+                    },
+                    "entity2": {
+                        "id": entity2["__id__"],
+                        "name": entity2.get("entity_name", ""),
+                        "type": entity2.get("type", ""),
+                        "index": j
+                    },
+                    "similarity": float(similarity[i, j])
+                })
+    
+    return pairs
+
+def save_pairs_to_json(pairs: List[Dict[str, Any]], output_file: str) -> None:
+    """Save entity pairs to JSON file.
+    
+    Args:
+        pairs: List of entity pairs
+        output_file: Path to output JSON file
+    """
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump({
+            "pairs": pairs,
+            "total_pairs": len(pairs)
+        }, f, ensure_ascii=False, indent=2)
 
 @final
 @dataclass
@@ -54,7 +187,7 @@ class NanoVectorDBStorage(BaseVectorStorage):
         if not len(data):
             logger.warning("You insert an empty data to vector DB")
             return []
-        # print("dm m có gọi t ra mà")
+
         current_time = time.time()
         list_data = [
             {
@@ -69,26 +202,16 @@ class NanoVectorDBStorage(BaseVectorStorage):
             contents[i : i + self._max_batch_size]
             for i in range(0, len(contents), self._max_batch_size)
         ]
-        # save batch ra ngoai
-        
+
         embedding_tasks = [self.embedding_func(batch) for batch in batches]
         embeddings_list = await asyncio.gather(*embedding_tasks)
 
         embeddings = np.concatenate(embeddings_list)
-        
-        # print(len(embeddings), len(list_data))
         if len(embeddings) == len(list_data):
             for i, d in enumerate(list_data):
                 d["__vector__"] = embeddings[i]
-                # print(d["__vector__"])
-                # print(embeddings[i])
-                # print(d)
             results = self._client.upsert(datas=list_data)
-            async with self._save_lock:
-                self._client.save()
-            logger.info(f"Successfully saved {len(list_data)} vectors to {self.namespace}")
-            return results        
-            # return results
+            return results
         else:
             # sometimes the embedding is not returned correctly. just log it.
             logger.error(
@@ -171,194 +294,62 @@ class NanoVectorDBStorage(BaseVectorStorage):
         async with self._save_lock:
             self._client.save()
 
-    async def get_entity_embedding(self, entity_name: str) -> np.ndarray | None:
-        """Get embedding vector for an entity by name
+    async def find_and_store_similar_pairs(self, file1: str, file2: str, threshold: float = 0.8) -> None:
+        """Load two matrices from JSON files, find similar pairs, and store them.
         
         Args:
-            entity_name (str): Tên entity cần lấy embedding
-            
-        Returns:
-            np.ndarray | None: Vector embedding hoặc None nếu không tìm thấy
-        """
-        # Chuẩn hóa entity name
-        entity_name = f'"{entity_name.upper()}"' if not entity_name.startswith('"') else entity_name.upper()
-        entity_id = compute_mdhash_id(entity_name, prefix="ent-")
-        
-        try:
-            # Lấy data object từ nano-vectordb
-            data = self._client.get([entity_id])
-            
-            if data and len(data) > 0:
-                # Tìm chỉ mục của entity trong storage data
-                index = None
-                for i, item in enumerate(self._client._NanoVectorDB__storage["data"]):
-                    if item["__id__"] == entity_id:
-                        index = i
-                        break
-                
-                if index is not None:
-                    # Lấy vector từ matrix theo index
-                    vector = self._client._NanoVectorDB__storage["matrix"][index]
-                    logger.debug(f"Found embedding for entity: {entity_name}")
-                    return vector
-                else:
-                    logger.warning(f"Entity found but no embedding vector: {entity_name}")
-            else:
-                logger.warning(f"Entity not found: {entity_name}")
-        except Exception as e:
-            logger.error(f"Error getting embedding for entity {entity_name}: {e}")
-        
-        return None
-
-    async def get_entity_embedding_by_id(self, entity_id: str) -> np.ndarray | None:
-        """Get embedding vector for an entity by name
-        
-        Args:
-            entity_name (str): Tên entity cần lấy embedding
-            
-        Returns:
-            np.ndarray | None: Vector embedding hoặc None nếu không tìm thấy
-        """        
-        try:
-            # Lấy data object từ nano-vectordb
-            data = self._client.get([entity_id])
-            
-            if data and len(data) > 0:
-                # Tìm chỉ mục của entity trong storage data
-                index = None
-                for i, item in enumerate(self._client._NanoVectorDB__storage["data"]):
-                    if item["__id__"] == entity_id:
-                        index = i
-                        break
-                
-                if index is not None:
-                    # Lấy vector từ matrix theo index
-                    vector = self._client._NanoVectorDB__storage["matrix"][index]
-                    logger.debug(f"Found embedding for entity: {entity_id}")
-                    return vector
-                else:
-                    logger.warning(f"Entity found but no embedding vector: {entity_id}")
-            else:
-                logger.warning(f"Entity not found: {entity_id}")
-        except Exception as e:
-            logger.error(f"Error getting embedding for entity {entity_id}: {e}")
-        
-        return None
-
-    async def get_relation_embedding(self, src_id: str, tgt_id: str) -> np.ndarray | None:
-        """Get embedding vector for a relation between two entities
-        
-        Args:
-            src_id (str): Tên entity nguồn
-            tgt_id (str): Tên entity đích
-            
-        Returns:
-            np.ndarray | None: Vector embedding hoặc None nếu không tìm thấy
-        """
-        # Chuẩn hóa entity names
-        src_id = f'"{src_id.upper()}"' if not src_id.startswith('"') else src_id.upper()
-        tgt_id = f'"{tgt_id.upper()}"' if not tgt_id.startswith('"') else tgt_id.upper()
-        
-        # Tạo relation ID
-        relation_id = compute_mdhash_id(src_id + tgt_id, prefix="rel-")
-        
-        try:
-            # Tìm kiếm relation theo ID
-            index = None
-            for i, item in enumerate(self._client._NanoVectorDB__storage["data"]):
-                if item["__id__"] == relation_id:
-                    index = i
-                    break
-            
-            if index is not None:
-                # Lấy vector từ matrix theo index
-                vector = self._client._NanoVectorDB__storage["matrix"][index]
-                return vector
-            else:
-                # Thử tìm theo chiều ngược lại
-                reverse_relation_id = compute_mdhash_id(tgt_id + src_id, prefix="rel-")
-                
-                for i, item in enumerate(self._client._NanoVectorDB__storage["data"]):
-                    if item["__id__"] == reverse_relation_id:
-                        vector = self._client._NanoVectorDB__storage["matrix"][i]
-                        return vector
-                        
-                logger.warning(f"Relation between {src_id} and {tgt_id} not found")
-        except Exception as e:
-            logger.error(f"Error getting embedding for relation between {src_id} and {tgt_id}: {e}")
-        
-        return None
-
-
-    async def get_chunk_embedding(self, chunk_id: str) -> np.ndarray | None:
-        """Get embedding vector for a text chunk
-        
-        Args:
-            chunk_id (str): ID của chunk cần lấy embedding
-            
-        Returns:
-            np.ndarray | None: Vector embedding hoặc None nếu không tìm thấy
+            file1: Path to first JSON file
+            file2: Path to second JSON file
+            threshold: Similarity threshold (default: 0.8)
         """
         try:
-            # Lấy data object từ nano-vectordb
-            data = self._client.get([chunk_id])
+            # Load matrices
+            matrix1 = load_matrix_from_json(file1)
+            matrix2 = load_matrix_from_json(file2)
             
-            if data and len(data) > 0:
-                # Tìm chỉ mục của chunk trong storage data
-                index = None
-                for i, item in enumerate(self._client._NanoVectorDB__storage["data"]):
-                    if item["__id__"] == chunk_id:
-                        index = i
-                        break
-                
-                if index is not None:
-                    # Lấy vector từ matrix theo index
-                    vector = self._client._NanoVectorDB__storage["matrix"][index]
-                    logger.debug(f"Found embedding for chunk: {chunk_id}")
-                    return vector
-                else:
-                    logger.warning(f"Chunk found but no embedding vector: {chunk_id}")
-            else:
-                logger.warning(f"Chunk not found: {chunk_id}")
+            # Find similar pairs
+            pairs = find_similar_pairs(matrix1, matrix2, threshold)
+            
+            # Store pairs in vector DB
+            pair_data = {}
+            for i, j, similarity in pairs:
+                pair_id = f"pair_{i}_{j}"
+                pair_data[pair_id] = {
+                    "content": f"Similar pair {i}-{j}",
+                    "similarity": similarity,
+                    "index1": i,
+                    "index2": j
+                }
+            
+            # Store pairs in vector DB
+            # await self.upsert(pair_data)
+            # logger.info(f"Stored {len(pairs)} similar pairs")
+            
         except Exception as e:
-            logger.error(f"Error getting embedding for chunk {chunk_id}: {e}")
-        
-        return None
+            logger.error(f"Error finding and storing similar pairs: {e}")
+            raise
 
-    async def batch_get_embeddings(self, ids: list[str]) -> dict[str, np.ndarray]:
-        """Get embeddings for multiple items by their IDs
+    async def find_and_save_entity_pairs(self, vdb1_path: str, vdb2_path: str, output_path: str, threshold: float = 0.8) -> None:
+        """Find similar entity pairs between two VDBs and save to JSON file.
         
         Args:
-            ids (list[str]): Danh sách các ID cần lấy embedding
-            
-        Returns:
-            dict[str, np.ndarray]: Dictionary {id: embedding_vector}
+            vdb1_path: Path to first VDB file
+            vdb2_path: Path to second VDB file
+            output_path: Path to save pairs JSON file
+            threshold: Similarity threshold (default: 0.8)
         """
-        results = {}
-        
         try:
-            data_objects = self._client.get(ids)
-            id_to_index = {}
+            # Load VDBs
+            vdb1 = load_entity_vdb(vdb1_path)
+            vdb2 = load_entity_vdb(vdb2_path)
             
-            # Tạo mapping từ ID đến index trong matrix
-            for i, item in enumerate(self._client._NanoVectorDB__storage["data"]):
-                if item["__id__"] in ids:
-                    id_to_index[item["__id__"]] = i
+            # Find similar pairs
+            pairs = find_entity_pairs(vdb1, vdb2, threshold)
             
-            # Lấy embedding từ matrix
-            for id_value in ids:
-                if id_value in id_to_index:
-                    index = id_to_index[id_value]
-                    results[id_value] = self._client._NanoVectorDB__storage["matrix"][index]
-                else:
-                    logger.warning(f"No embedding found for ID: {id_value}")
+            # Save pairs to JSON file
+            save_pairs_to_json(pairs, output_path)
+            logger.info(f"Found and saved {len(pairs)} similar entity pairs to {output_path}")
+            
         except Exception as e:
-            logger.error(f"Error in batch getting embeddings: {e}")
-        
-        return results
-
-    async def force_save(self) -> None:
-        """Force save the vector database to disk"""
-        async with self._save_lock:
-            self._client.save()
-            logger.info(f"Vector storage {self.namespace} saved to {self._client_file_name}")
+            logger.error(f"Error finding and saving entity pairs: {e}")
+            raise
